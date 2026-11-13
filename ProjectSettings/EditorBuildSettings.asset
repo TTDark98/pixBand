@@ -4,5 +4,10 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
-  m_configObjects: {}
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/PixBand_Demo.unity
+    guid: 66eae8f63b48b967a8efaf37db6414f8
+  m_configObjects:
+    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 63e021baeaf592a8c8dda8e27c7b7c21, type: 2}
+    com.unity.xr.openxr.settings4: {fileID: 11400000, guid: ddb5d551bca56b98881a724980a7d7b2, type: 2}
