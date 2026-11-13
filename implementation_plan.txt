@@ -1,0 +1,480 @@
+================================================================================
+ PIXBAND — VR FOREST WALK → THEATRE → DRUMS
+ Implementation plan, status ledger, and from-scratch build guide
+================================================================================
+
+Last updated : 2026-11-13 (demo target: 2026-11-14)
+Engine       : Unity 2022.3.62f3 LTS, Built-in Render Pipeline, Linear color
+Target       : Meta Quest 3S / Quest 3, standalone Android APK (OpenXR)
+Dev machines : Linux laptop (primary), Windows PC (fast builds), macOS (teammate)
+Assets       : free / CC0 only. No paid assets. No Meta XR SDK.
+Project root : /home/tt/pixBand
+
+This file is the single source of truth. Someone with no prior context must be
+able to clone the repo, follow sections 4–9, and produce the same APK.
+
+--------------------------------------------------------------------------------
+ 0. READ THIS FIRST — STATUS LEGEND
+--------------------------------------------------------------------------------
+[DONE]      implemented and verified in the editor
+[PARTIAL]   exists but does not meet the requirement yet
+[MISSING]   not implemented
+[BLOCKED]   needs hardware we do not have (Quest headset)
+[MANUAL]    needs a human click / account (Unity login, Meta dev mode)
+
+Current state is listed in section 2. Work log is section 14.
+
+--------------------------------------------------------------------------------
+ 1. THE EXPERIENCE (what the demo is)
+--------------------------------------------------------------------------------
+The user puts on the headset and is standing on a dirt path in a dark, dense,
+green-grey forest. Fog, moonlight shafts, fireflies, distant creaks. A title
+card in world space: "PIXBAND — walk into the woods". No flat menu.
+
+They walk with the left thumbstick (snap turn on the right). The path bends and
+the silhouette of a mansion resolves out of the fog. A prompt appears at the
+door. The door creaks open, the screen fades to black, and they are inside the
+existing theatre — stage, curtains, spotlights.
+
+The drum kit is on stage but dark and silent. Within ~3 m the kit wakes up:
+sticks highlight, prompt says "Grab the sticks". They grab a stick with the
+grip button and hit a pad. The hit produces a spatial one-shot, a controller
+haptic pulse, a drumhead recoil dip, and a small dust burst. Walk away and the
+sticks release back to the stand, the kit goes silent.
+
+One controller button (B / Y) resets back to the forest start. This exists for
+demo recovery, not as a feature.
+
+Non-goals for this demo: keyboard, guitar, rigged band members, a modelled
+mansion, photoreal foliage, multiplayer, hand-tracking-only mode.
+
+--------------------------------------------------------------------------------
+ 2. CURRENT STATUS — AUDIT OF THE EXISTING PROJECT
+--------------------------------------------------------------------------------
+RUNTIME / SCENE
+[DONE]     Theatre interior exists: floor, stage, auditorium shell, 7 spotlights,
+           curtains, proscenium, backdrop, solid stage collider
+[DONE]     Drum kit model with AudioSource + InstrumentInteractable
+[DONE]     Keyboard + guitar models exist (to be hidden for the demo)
+[DONE]     Drum samples: kick/snare/tom/cymbal style clips in Assets/Audio/Horror/SFX
+[DONE]     Loop clip: Assets/Audio/Music/drum_beat_loop.mp3
+[PARTIAL]  Spatial audio config: spatialBlend 1, logarithmic rolloff, spread 45,
+           doppler 0.5 (good base, unused until hits are wired)
+[PARTIAL]  Desktop first-person rig: CharacterController + mouse look + WASD works
+[PARTIAL]  XR rig: XROriginRig exists but is DISABLED, has only one child camera
+           (Camera Offset → XR Camera with Camera + AudioListener +
+           TrackedPoseDriver). No controllers, no interactors, no locomotion.
+[MISSING]  Drum proximity gating (current code auto-plays the loop on Start,
+           from any distance — this is the bug the demo must fix)
+[MISSING]  Grab interaction (no XRGrabInteractable anywhere)
+[MISSING]  Hit detection, haptics, drumhead recoil, hit particles
+[MISSING]  Forest scene
+[MISSING]  Mansion exterior / door / entrance
+[MISSING]  Scene flow + fade transition
+[MISSING]  Title card / prompts / reset
+[MISSING]  Two AudioListeners will exist if both rigs are enabled (must be fixed)
+
+BUILD / PLATFORM
+[DONE]     Android Build Support installed for 2022.3.62f3 (SDK, NDK, JDK, adb)
+[DONE]     XR Interaction Toolkit 2.5.4 + Input System 1.7.0 installed
+[DONE]     Internet access to Unity package registry
+[MISSING]  XR Plug-in Management + OpenXR packages (no Assets/XR folder at all)
+[MISSING]  OpenXR loader enabled for Android, Meta Quest Support feature enabled
+[MISSING]  Android player config: currently Mono + ARMv7 + minSdk 22 + no bundle id.
+           Quest requires IL2CPP + ARM64 + minSdk 29 + target 32 + bundle id.
+[MISSING]  Single Pass Instanced / Multiview stereo rendering
+[MISSING]  Any APK has ever been built from this project
+[MISSING]  Build script / one-click APK menu item
+[MISSING]  APK smoke test on device [BLOCKED until headset access]
+
+VERSION CONTROL / HYGIENE
+[MISSING]  Zero git commits. The whole project is untracked.
+[PARTIAL]  .gitignore exists (Library/ etc. ignored)
+[MISSING]  ~30 MB of mono_crash.*.mem dumps in the project root (delete, do not commit)
+[MISSING]  No README / run instructions (this file becomes that document)
+
+ASSETS
+[MISSING]  No tree / forest / terrain assets
+[MISSING]  No mansion model
+[MISSING]  No hit particles / dust
+[PARTIAL]  Library has no forest-quality shaders; Built-in RP only
+
+--------------------------------------------------------------------------------
+ 3. ARCHITECTURE
+--------------------------------------------------------------------------------
+Scenes
+  Assets/Scenes/Forest_Approach.unity   ← build index 0, start scene
+  Assets/Scenes/Theatre_Drums.unity     ← build index 1, copy of current theatre
+
+Flow
+  Forest_Approach
+    ├─ Environment (terrain, tree chunks, fog, moonlight, particles)
+    ├─ StartArea (title card, spawn point)
+    ├─ MansionExterior (facade, door trigger)
+    └─ SceneFlowManager (fade, load Theatre_Drums, reset)
+  Theatre_Drums
+    ├─ (existing theatre content, unchanged)
+    ├─ DrumKit_Instrument (drums only; keyboard/guitar hidden)
+    ├─ DrumProximity (activation radius + prompt)
+    └─ ResetToForest (input action)
+
+Scripts to add (Assets/Scripts/)
+  Environment/ProceduralForest.cs   editor-time scatter + chunk mesh combine
+  Environment/ForestAtmosphere.cs   fog/ambient/fireflies setup at runtime
+  Flow/SceneFlowManager.cs          fade, scene load, reset, single AudioListener
+  Flow/FadeScreen.cs                camera-space black quad, coroutine fade
+  Interaction/DrumProximityZone.cs  distance gate + prompt + enable/disable
+  Interaction/DrumStick.cs          grab handling, return to stand, velocity
+  Interaction/DrumPad.cs            hit detection, clip, haptic, recoil, dust
+  Interaction/HapticUtil.cs         controller haptic impulse helper
+  Editor/PixBandBuild.cs            menu: PixBand/Build Android APK (+ Linux)
+  Editor/SceneBuilder.cs            menu: PixBand/Rebuild Demo Scenes (optional)
+
+Scripts to modify
+  DualRigManager.cs       choose rig by platform; never two AudioListeners
+  InstrumentInteractable.cs  remove auto-play on Start; expose PlayOneShot
+  StageAudioController.cs    optional ducking/ambience; keep out of drum path
+  FirstPersonAudioRig.cs  desktop fallback only; no changes required if unused
+
+--------------------------------------------------------------------------------
+ 4. PROJECT SETUP FROM ZERO (anyone, any OS)
+--------------------------------------------------------------------------------
+
+4.1 Get the project
+    git clone <repo> pixBand
+    The repo does NOT contain Library/, Temp/, Logs/, Builds/, *.mem.
+    On first open Unity rebuilds Library (5–15 min).
+
+4.2 Unity version
+    Install Unity 2022.3.62f3 via Unity Hub with modules:
+      - Android Build Support (+ OpenJDK, Android SDK & NDK Tools)
+      - Linux Build Support (Mono)     [for the desktop fallback]
+      - Windows Build Support (Mono)   [optional, fast PC]
+      - Mac Build Support (Mono)       [teammate]
+    No other Unity version is known-good. Do not upgrade the project.
+
+4.3 Packages (Packages/manifest.json)
+    Install through Window > Package Manager > Add package by name, or let
+    Unity resolve this file on open:
+      com.unity.inputsystem                 1.7.0   (already)
+      com.unity.xr.interaction.toolkit      2.5.4   (already)
+      com.unity.xr.management               4.5.4
+      com.unity.xr.openxr                   1.17.1
+    Why these: OpenXR 1.17.x is the newest line published for Unity 2022.3 and
+    includes the "Meta Quest Support" feature group. XR Management 4.5.x is the
+    2022.3-compatible line. Exact resolved versions get recorded in section 14
+    after the first successful resolve.
+    If Package Manager refuses a version, use the nearest newer patch of the
+    same minor line; do not jump to a 6000.0-only version.
+
+4.4 Player settings (Project Settings > Player)
+    Company Name            : PixBand
+    Product Name            : pixBand
+    Bundle Identifier       : com.pixband.vr
+    Version                 : 1.0
+    Scripting Backend       : IL2CPP          (Android tab)
+    Target Architectures    : ARM64 only      (Quest 3/3S are ARM64; ARMv7 bloats
+                                               the APK and is never used)
+    Minimum API Level       : Android 10.0 (API 29)
+    Target API Level        : Android 12L (API 32)  (Quest system image is 12L)
+    Active Input Handling   : Both            (keeps legacy desktop scripts alive)
+    Color Space             : Linear          (already set)
+    Auto Graphics API       : OFF
+    Graphics APIs (Android) : Vulkan first, OpenGLES3 second
+    Multithreaded Rendering : ON
+    Static Batching         : ON
+    Graphics Jobs           : OFF
+    Managed Stripping Level : Low             (avoid IL2CPP stripping surprises)
+
+4.5 XR Plug-in Management
+    Project Settings > XR Plug-in Management
+      - Install XR Plugin Management if prompted
+      - Android tab: tick "OpenXR"
+      - OpenXR > Features: tick "Meta Quest Support"
+        (this is the loader/runtime feature; do NOT add the Meta XR SDK)
+    The project must NOT reference any Meta-only package — OpenXR keeps it
+    universal across Linux/Windows/macOS editors and the Quest runtime.
+
+4.6 Quality / rendering (Quest budget)
+    Built-in RP, one quality level used by all platforms.
+    - Shadows: hard shadows only, distance 15 m, 1 cascade; no soft shadows
+    - Anti-aliasing: 2x MSAA max (or off; test on device)
+    - Texture quality: half res, ASTC 6x6 for Android
+    - V-Sync: off (XR runtime controls present timing)
+    - Resolution scaling: 0.9 via XRSettings.renderViewportScale at runtime
+    - Realtime GI: OFF. Baked GI only where it is cheap.
+    - Fog: exponential squared, dark green, density ~0.03 — this is both the
+      look and the culling budget.
+    Budget on screen: <120 draw calls, <250k triangles, 72 Hz stable on 3S.
+    All tree geometry merged into per-chunk meshes (no per-tree renderers),
+    static-flagged, GPU instancing on, one material per tree type.
+
+--------------------------------------------------------------------------------
+ 5. SCENE 1 — FOREST (start / "menu")
+--------------------------------------------------------------------------------
+
+5.1 Layout
+    Playable area 80 x 80 m, dense forest everywhere except a 2.5 m path.
+    Path: spawn (0,0,0) → gentle S-bend → mansion door at (0,0,55).
+    Mansion facade sits at z=55, rotated to face the spawn.
+    Collision: terrain collider + invisible walls at the arena edge. Trees get
+    capsule colliders only within 12 m of the path (cost control).
+
+5.2 Geometry — procedural, no external asset dependency
+    Rationale: free forest packs either need an Asset Store login, add 1–2 GB,
+    or import with materials/LODs that must be re-tuned for Quest. For a one
+    night build with no device testing, a deterministic procedural forest is
+    lower risk and is fully reproducible from this document alone.
+    - Terrain: 128x128 grid, 2 octaves of value noise, smoothed, 80 m square,
+      vertex-colored dark moss green, no texture needed.
+    - Trees: 3 variants of low-poly conifer (trunk + 3–4 stacked cone tiers),
+      each 40–120 tris. Scatter 700–1000 instances with Poisson-ish jitter,
+      density falloff near the path, random yaw/scale.
+    - Merge: group trees into 10 m chunks → one mesh per chunk, one material
+      per tree type. ~64 chunks → ~64 draw calls for the entire forest.
+    - Rocks/roots: 30 low-poly rocks along the path edges for parallax.
+    - Ground dressing: 2–3 dead branch meshes + fern crosses (billboards).
+
+5.3 Atmosphere (this is what sells "impressive on first load")
+    - Fog: Exponential Squared, color RGB (0.045, 0.075, 0.055), density 0.028
+    - Ambient: flat, very dark green-blue; skybox off (solid fog color)
+    - Moon: one directional light, dim blue-green, shadows OFF (fog + emissive
+      accents do the work; shadows are the first thing Quest cannot afford here)
+    - Moon shafts: 6–10 cheap additive cone/quad meshes through the canopy
+    - Fireflies: one particle system, 120 particles, additive, 1 draw call
+    - Ground mist: 3 large slowly-drifting transparent planes at ankle height
+    - Audio: looping wind bed + occasional owl/creak one-shots, 3D sources
+
+5.4 Mansion (simple but readable)
+    - Blockout: 14 x 10 x 12 m box, gable roof, 2 columns, 4 window emissive
+      planes (warm dim), 1 double door (2 m x 3 m)
+    - Material: dark desaturated stone/wood; silhouette mostly read through fog
+    - Door trigger: 3 m radius → prompt "Open" + audio creak → fade → load
+      Theatre_Drums. The door itself does not need an animation; the fade and
+      creak carry it.
+
+--------------------------------------------------------------------------------
+ 6. SCENE 2 — THEATRE + DRUMS
+--------------------------------------------------------------------------------
+
+6.1 Reuse
+    Copy the current HorrorMansion_SpatialAudio scene to Theatre_Drums.unity.
+    Keep all existing transforms, lighting and audio. Changes:
+    - Deactivate Yamaha_Keyboard_Instrument + Spotlight - Keyboard
+    - Deactivate Guitar_Instrument + Spotlight - Guitar
+    - Keep DrumKit_Instrument, but remove auto-play-on-Start (section 6.2)
+    - Put the XR rig spawn at (0, 0, -6) facing the stage
+
+6.2 DrumProximityZone
+    - Sphere trigger, radius 3.0 m, centred on the kit
+    - Player enters: enable stick GrabInteractables, show prompt
+      "Grab the sticks", fade the stage spotlight up slightly, start a very
+      quiet room tone
+    - Player leaves: force-release sticks, disable grab, silence kit, prompt off
+    - No audio from the kit at any distance unless a pad is hit
+
+6.3 Sticks and grabbing
+    - Two stick prefabs: capsule (0.02 x 0.45 m) + tip collider, dark wood
+      material, held at the grip end. Add XRGrabInteractable (XRI 2.5.4),
+      Rigidbody kinematic while held, "snap" attach at the grip transform.
+    - Rest state: sticks sit on a stand at the kit. On release, they tween back
+      to the stand socket and become non-interactable until the player is near.
+    - Velocity: kinematic bodies report no useful velocity, so DrumStick tracks
+      the tip's world position each FixedUpdate and derives its own velocity.
+
+6.4 Hit detection — DrumPad
+    - Pads: snare, 2 toms, hi-hat, crash, ride, kick (kick optional).
+    - Collider trigger on each pad; OnTriggerEnter with a DrumStick tip.
+    - Require tip speed > 0.6 m/s to count (prevents resting sticks from
+      machine-gunning the sample).
+    - On hit: PlayOneShot(clip, velocity-scaled volume), haptic impulse 0.15–
+      0.35 on the grabbing controller, drumhead recoil (local Y -0.5 cm, 60 ms
+      in, 120 ms out), dust particle burst, small random pitch (±3%).
+    - Cooldown 40 ms per pad to avoid double triggers from the same swing.
+
+6.5 Audio
+    - Kit AudioSource: spatialBlend 1, logarithmic rolloff, min 1.5, max 25,
+      doppler 0.5, spread 20
+    - One-shots only; no looping beat. The backing loop may play very quietly
+      in the theatre as atmosphere at -18 dB, but it must not be the drum sound.
+    - Optional stretch: Google Resonance Audio (free, Android-capable) for HRTF.
+      Only if the base build is already green.
+
+6.6 Reset
+    - B / Y button → SceneFlowManager.ResetToForest(): fade out, load scene 0,
+      restore rig position, clear held objects.
+
+--------------------------------------------------------------------------------
+ 7. INPUT & COMFORT
+--------------------------------------------------------------------------------
+Controllers: Meta Quest Touch (OpenXR). Hand tracking is a stretch goal only;
+the demo must never depend on it, because a dark scene plus a lit room is the
+worst case for camera-based hand tracking.
+
+Bindings (XRI Default Input Actions or a project copy):
+  Left stick        continuous move (1.6 m/s, no sprint, no jump)
+  Right stick       snap turn 30 deg (comfort) — smooth turn as a toggle
+  Left/right grip   grab
+  Left/right trigger: UI / poke
+  B / Y             reset to forest start
+  Menu              recenter (optional)
+
+Comfort:
+  - No artificial acceleration, no head bob, no camera shake
+  - Fade-to-black on scene change and on reset (never a hard cut)
+  - Spawn always stationary, facing forward
+  - 72 Hz preferred over 90 Hz for thermal headroom on a 3S
+
+--------------------------------------------------------------------------------
+ 8. AUDIO
+--------------------------------------------------------------------------------
+All one-shots and ambience: spatialBlend 1 for world sources, 0 for UI.
+Ambience beds are mono, compressed-in-memory, looping. Transients are mono,
+decompress-on-load, Vorbis 75. Do not import stereo clips for 3D point sources.
+Quest speakers are the target playback device; check the mix on the built-in
+speakers, not headphones.
+
+--------------------------------------------------------------------------------
+ 9. BUILD & DEPLOY
+--------------------------------------------------------------------------------
+
+9.1 One-click build (all OSes)
+    Menu: PixBand > Build Android APK
+    Output: Builds/pixBand.apk
+    The editor script sets the scene list, target, IL2CPP, ARM64 and fails loudly
+    if OpenXR/Meta Quest Support is not enabled.
+
+9.2 Linux laptop (primary, and the installer for the demo)
+    ~/Unity/Hub/Editor/2022.3.62f3/Editor/Unity -projectPath .
+    Java: let Unity use its bundled OpenJDK. Do NOT set a system JDK 25 as the
+    Gradle JDK — Gradle in Unity 2022.3 expects JDK 17.
+    Build takes 5–15 min the first time (IL2CPP), 2–5 min after.
+
+9.3 Windows PC (fast build machine)
+    Install the same Unity version + Android module, open the repo, run
+    PixBand > Build Android APK. The APK is identical and portable; copy it to
+    the Linux laptop over USB/network for sideloading.
+
+9.4 macOS (teammate)
+    Same Unity version; Android module optional. macOS can open the project but
+    cannot produce the Quest APK without the Android module. The project must
+    not contain Linux-only paths or packages.
+
+9.5 Install on Quest (Linux laptop)
+    Prereqs on the headset (once):
+      1. Meta account + phone app, Developer Mode ON
+      2. USB-C data cable, accept "Allow USB debugging" in the headset
+    Commands:
+      ADB=~/Unity/Hub/Editor/2022.3.62f3/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb
+      $ADB devices                       # must show one "device"
+      $ADB install -r Builds/pixBand.apk
+      $ADB shell monkey -p com.pixband.vr 1     # launch
+      $ADB logcat -s Unity:V              # runtime errors
+      $ADB shell screenrecord /sdcard/demo.mp4  # capture for your report
+    Uninstall: $ADB uninstall com.pixband.vr
+
+9.6 APK static checks (can be done with no headset)
+    unzip -l Builds/pixBand.apk | grep lib/arm64-v8a     # libunity.so present
+    $ADB shell getprop ro.product.model                  # Quest 3 / 3S
+    Check AndroidManifest inside the APK for:
+      - android:name="android.app.lib_name" value="unity"
+      - <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD"/>
+      - <uses-feature android:name="android.hardware.vr.headtracking"/>
+      - minSdkVersion 29, targetSdkVersion 32
+
+--------------------------------------------------------------------------------
+ 10. TESTING WITHOUT A HEADSET
+--------------------------------------------------------------------------------
+Order of value:
+  1. XR Device Simulator in the editor (Window > XR > XR Device Simulator).
+     Test: rig height, controller rays, grab, hit detection, proximity gate,
+     audio panning, reset, scene flow. This catches most logic bugs.
+  2. Flat Linux standalone build (Builds/Linux) — same scene flow with WASD,
+     evidence that the build path works, and the fallback demo if the headset
+     fails on the day.
+  3. APK static checks (9.6) — proves the Android/OpenXR packaging is correct.
+  4. Windows PC with Meta Quest Developer Hub + Meta XR Simulator (if the PC
+     runs Windows) — the only realistic pre-device XR validation of tracking,
+     comfort and performance.
+  5. On-device smoke test when the headset arrives (section 11) — the only
+     proof of frame rate, comfort and real tracking.
+
+What CANNOT be validated without the device:
+  - actual 72 Hz stability, thermal throttling, lens comfort
+  - real hand/controller tracking and haptics
+  - text legibility at the rendered resolution
+  - whether the fog density reads as "atmosphere" or as "grey wall"
+
+--------------------------------------------------------------------------------
+ 11. DEMO-DAY CHECKLIST (10 minutes)
+--------------------------------------------------------------------------------
+[ ] Headset charged >60%, controllers paired, room lit enough for tracking
+[ ] Developer Mode ON, USB debugging accepted
+[ ] adb devices shows the headset
+[ ] adb install -r Builds/pixBand.apk succeeds
+[ ] Launch com.pixband.vr, guardian set to stationary or small roomscale
+[ ] On-device checks:
+    [ ] forest loads, title card legible, no black screen
+    [ ] eye height correct (~1.6 m), no floor clipping
+    [ ] thumbstick move + snap turn work, no drift
+    [ ] mansion door prompt appears, transition completes, no double AudioListener
+    [ ] drums silent from across the theatre
+    [ ] sticks grab and release, hits produce sound + haptics + recoil
+    [ ] B/Y reset returns to forest
+    [ ] 2 minutes of play without visible stutter
+[ ] Fallback ready: Linux build + laptop + screen recording of a good run
+[ ] Contingency: if APK fails, demo the Unity editor/Desktop build and explain
+
+--------------------------------------------------------------------------------
+ 12. RISKS AND FALLBACKS
+--------------------------------------------------------------------------------
+RISK: OpenXR + Quest build fails on first try (manifest, IL2CPP, shader).
+  MITIGATION: build a bare APK in step 1 of the work log, before content.
+RISK: No device until demo day → perf/comfort unknown.
+  MITIGATION: conservative budgets, fog culling, no shadows, desktop + simulator
+  validation, and a fallback Linux build.
+RISK: Forest too heavy on a 3S.
+  MITIGATION: merged chunk meshes, no per-tree renderers, fog draw distance,
+  LOD/impostor upgrade path, runtime render scale 0.8–0.9.
+RISK: Hand tracking unreliable in a dark scene.
+  MITIGATION: controllers are the required path; hands are a stretch toggle.
+RISK: Unity Asset Store login unavailable on the dev machine.
+  MITIGATION: the procedural forest needs no Asset Store assets at all.
+RISK: Time. A full polished demo is not achievable; the must-have list is
+  section 1 and 13's "must".
+  MITIGATION: ship must-haves, polish only what is on screen in the first
+  60 seconds (forest, title, drums).
+
+--------------------------------------------------------------------------------
+ 13. DEFINITION OF DONE
+--------------------------------------------------------------------------------
+MUST (demo fails without these)
+  [ ] APK installs and launches on Quest 3/3S
+  [ ] Correct eye height and controller tracking (OpenXR)
+  [ ] Forest scene loads as the start, reads as dark/green/dense through fog
+  [ ] Continuous movement + snap turn, no motion sickness traps
+  [ ] Walk to mansion, enter theatre via fade
+  [ ] Drums silent until near, then grabbable
+  [ ] Grab stick, hit pad → sound + haptic + recoil
+  [ ] Release stick → returns to stand
+  [ ] Reset button returns to forest
+  [ ] No compilation errors, no missing references, no double AudioListener
+SHOULD
+  [ ] Title card, prompts, door creak, ambience, fireflies, light shafts
+  [ ] Linux desktop fallback build
+  [ ] On-device smoke test before the presentation
+COULD (only if everything above is green)
+  [ ] Hand-tracking pinch grab
+  [ ] HRTF audio
+  [ ] Keyboard/guitar
+  [ ] Backing band loop
+WON'T
+  [ ] Modelled mansion, rigged characters, photoreal forest, multiplayer
+
+--------------------------------------------------------------------------------
+ 14. WORK LOG / HISTORY
+--------------------------------------------------------------------------------
+2026-11-13  Project audited (section 2). No commits existed. No XR/OpenXR
+            packages, no Android player config, no forest/mansion/drums gating.
+            This document rewritten from the original horror-mansion plan to the
+            actual demo scope: forest approach → theatre → playable drums.
