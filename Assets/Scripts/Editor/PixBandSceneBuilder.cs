@@ -6,6 +6,7 @@ using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR.Interaction.Toolkit;
 using PixBand.Audio;
+using PixBand.Ambient;
 using PixBand.Core;
 using PixBand.Interaction;
 using TMPro;
@@ -24,6 +25,12 @@ namespace PixBand.EditorTools
         private const string XrSetupPath = "Assets/Samples/XR Interaction Toolkit/2.5.4/Starter Assets/Prefabs/XR Interaction Setup.prefab";
         private const string XrSimulatorPath = "Assets/Samples/XR Interaction Toolkit/2.5.4/XR Device Simulator/XR Device Simulator.prefab";
         private const string MaterialsDir = "Assets/Materials";
+
+        private const string CatModelPath = "Assets/Models/Cat/Cat_Animated.fbx";
+        private const string SkeletonModelPath = "Assets/Models/Skeletons/Skeleton_Male.fbx";
+        private const string HandLeftModelPath = "Assets/Models/Player/HandsVR_Left.fbx";
+        private const string HandRightModelPath = "Assets/Models/Player/HandsVR_Right.fbx";
+        private const string HandSkinPath = "Assets/Models/Player/T_VRHands_Base_color.png";
 
         private const float ForestSize = 90f;
         private const int ForestResolution = 128;
@@ -70,7 +77,7 @@ namespace PixBand.EditorTools
 
             ApplySurfaceTexture(bark, "Forest_Bark", "bark", new Color(0.045f, 0.034f, 0.026f), new Color(0.22f, 0.15f, 0.09f), new Vector2(3f, 3f), 0.05f, 0.18f);
             ApplySurfaceTexture(leaf, "Forest_Needles", "mottle", new Color(0.018f, 0.055f, 0.035f), new Color(0.11f, 0.22f, 0.12f), new Vector2(2f, 2f), 0f, 0.08f);
-            ApplySurfaceTexture(ground, "Forest_Moss", "mottle", new Color(0.035f, 0.055f, 0.035f), new Color(0.15f, 0.20f, 0.11f), new Vector2(6f, 6f), 0f, 0.02f);
+            ApplySurfaceTexture(ground, "Forest_Grass_Detail", "grass", new Color(0.025f, 0.055f, 0.025f), new Color(0.26f, 0.32f, 0.13f), new Vector2(32f, 32f), 0f, 0.01f);
             ApplySurfaceTexture(dirt, "Forest_Dirt", "dirt", new Color(0.10f, 0.062f, 0.038f), new Color(0.34f, 0.24f, 0.13f), new Vector2(5f, 7f), 0f, 0.04f);
             ApplySurfaceTexture(stone, "Mansion_Rough_Stone", "stone", new Color(0.035f, 0.045f, 0.045f), new Color(0.22f, 0.24f, 0.22f), new Vector2(2f, 2f), 0.08f, 0.22f);
             ApplySurfaceTexture(roof, "Mansion_Slate", "stone", new Color(0.018f, 0.025f, 0.033f), new Color(0.12f, 0.15f, 0.17f), new Vector2(4f, 3f), 0.22f, 0.2f);
@@ -84,8 +91,8 @@ namespace PixBand.EditorTools
             Vector3 kitPosition = BuildMansion(stone, roof, wood, plaster, bone, socket, windowGlow, lanternGlow);
             BuildLanterns();
             BuildFireflies();
-            BuildFogLayer("Forest_Ground_Mist", new Vector3(0f, 1.1f, 17f), new Vector3(62f, 1.4f, 62f), 44, 0.075f);
-            BuildFogLayer("Mansion_Room_Mist", new Vector3(MansionX, Height(MansionX, MansionZ) + 1.1f, MansionZ), new Vector3(8f, 0.8f, 8f), 10, 0.025f);
+            BuildForestMist();
+            BuildNightSky();
             BuildAmbience();
 
             if (kitPrefab != null)
@@ -97,6 +104,8 @@ namespace PixBand.EditorTools
                 AlignKitToRiser(kit);
                 ApplyDrumKitMaterials(kit);
                 WireKit(kit);
+                RemoveDecorativeKitColliders(kit);
+                kit.AddComponent<DrumKitPlayerCollisionGuard>();
             }
             else
             {
@@ -257,7 +266,12 @@ namespace PixBand.EditorTools
             }
 
             DrumPad[] pads = kit.GetComponentsInChildren<DrumPad>(true);
-            if (pads.Length == 0) pads = BuildPads(kit.transform, source, dust);
+            Material ringMaterial = MakeRingMaterial();
+            if (pads.Length == 0) pads = BuildPads(kit.transform, source, dust, ringMaterial);
+            WirePadVisuals(pads, ringMaterial);
+
+            DrumPerformance performance = kit.GetComponent<DrumPerformance>();
+            if (performance == null) performance = kit.AddComponent<DrumPerformance>();
 
             DrumProximityZone zone = kit.GetComponent<DrumProximityZone>();
             if (zone == null) zone = kit.AddComponent<DrumProximityZone>();
@@ -347,14 +361,39 @@ namespace PixBand.EditorTools
             }
         }
 
+        private static void RemoveDecorativeKitColliders(GameObject kit)
+        {
+            Collider[] colliders = kit.GetComponentsInChildren<Collider>(true);
+            int removed = 0;
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider collider = colliders[i];
+                if (collider == null) continue;
+
+                // Keep only the intentional stick grab volumes and drum-pad hit
+                // triggers. Imported visual meshes often contain oversized
+                // non-trigger capsules that can punt a CharacterController.
+                if (collider.GetComponentInParent<DrumStick>() != null ||
+                    collider.GetComponentInParent<DrumPad>() != null)
+                    continue;
+
+                Object.DestroyImmediate(collider);
+                removed++;
+            }
+
+            Debug.Log("[PixBand] Removed " + removed + " decorative drum-kit colliders");
+        }
+
         // ------------------------------------------------------------- terrain
 
         private static void ConfigureAtmosphere()
         {
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
-            RenderSettings.fogColor = new Color(0.055f, 0.085f, 0.068f);
-            RenderSettings.fogDensity = 0.052f;
+            RenderSettings.fogColor = new Color(0.075f, 0.105f, 0.12f);
+            // Keep close ground detail crisp while the far tree line fades into
+            // a soft cool night haze rather than disappearing into black.
+            RenderSettings.fogDensity = 0.017f;
             RenderSettings.ambientMode = AmbientMode.Flat;
             RenderSettings.ambientLight = new Color(0.10f, 0.145f, 0.115f);
             RenderSettings.skybox = null;
@@ -364,8 +403,8 @@ namespace PixBand.EditorTools
             GameObject moon = new GameObject("Moonlight");
             Light light = moon.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.color = new Color(0.55f, 0.72f, 0.75f);
-            light.intensity = 1.15f;
+            light.color = new Color(0.48f, 0.63f, 0.78f);
+            light.intensity = 0.48f;
             light.shadows = LightShadows.None;
             light.renderMode = LightRenderMode.ForcePixel;
             moon.transform.rotation = Quaternion.Euler(28f, 155f, 0f);
@@ -525,6 +564,7 @@ namespace PixBand.EditorTools
             renderer.sharedMaterial = material;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+            go.AddComponent<MeshCollider>().sharedMesh = mesh;
         }
 
         // -------------------------------------------------------------- forest
@@ -680,37 +720,53 @@ namespace PixBand.EditorTools
             uvs.Clear();
             List<int> leafTris = new List<int>();
 
-            float[] baseY = { 1.6f, 2.5f, 3.4f, 4.3f };
-            float[] radius = { 1.25f, 1.02f, 0.78f, 0.50f };
-            float[] tierHeight = { 1.5f, 1.4f, 1.25f, 1.0f };
+            // Dense, overlapping branch skirts create a more natural evergreen
+            // silhouette than four isolated cone primitives. The final crown is
+            // narrower and taller to break up the repeated triangular outline.
+            float[] baseY = { 1.35f, 2.15f, 3.0f, 3.85f, 4.65f };
+            float[] radius = { 1.3f, 1.12f, 0.91f, 0.70f, 0.48f };
+            float[] tierHeight = { 1.85f, 1.8f, 1.7f, 1.55f, 1.45f };
 
             for (int tier = 0; tier < baseY.Length; tier++)
             {
                 float r = radius[tier] * width * (0.92f + (float)random.NextDouble() * 0.16f);
                 float y0 = baseY[tier];
-                float y1 = y0 + tierHeight[tier];
-                int ringSides = 7;
+                int ringSides = 9;
                 int start = verts.Count;
 
-                for (int s = 0; s < ringSides; s++)
+                // Each bough skirt flares out low, then narrows in two steps.
+                // Per-vertex variation avoids perfectly machined silhouettes.
+                float[] profileY = { 0f, 0.18f, 0.58f, 1f };
+                float[] profileR = { 0.46f, 1f, 0.78f, 0.08f };
+                for (int ring = 0; ring < profileY.Length; ring++)
                 {
-                    float a = (float)s / ringSides * Mathf.PI * 2f;
-                    verts.Add(new Vector3(Mathf.Cos(a) * r, y0, Mathf.Sin(a) * r));
-                    normals.Add(new Vector3(Mathf.Cos(a) * 0.6f, 0.35f, Mathf.Sin(a) * 0.6f).normalized);
-                    uvs.Add(new Vector2((float)s / ringSides, 0f));
+                    for (int s = 0; s < ringSides; s++)
+                    {
+                        float a = (float)s / ringSides * Mathf.PI * 2f + tier * 0.37f;
+                        float irregular = 0.9f + (float)random.NextDouble() * 0.2f;
+                        float ringRadius = r * profileR[ring] * irregular;
+                        float y = y0 + tierHeight[tier] * profileY[ring];
+                        verts.Add(new Vector3(Mathf.Cos(a) * ringRadius, y, Mathf.Sin(a) * ringRadius));
+                        Vector3 normal = new Vector3(Mathf.Cos(a) * 0.72f, 0.46f, Mathf.Sin(a) * 0.72f).normalized;
+                        normals.Add(normal);
+                        uvs.Add(new Vector2((float)s / ringSides, profileY[ring]));
+                    }
                 }
 
-                int apex = verts.Count;
-                verts.Add(new Vector3(0f, y1, 0f));
-                normals.Add(Vector3.up);
-                uvs.Add(new Vector2(0.5f, 1f));
-
-                for (int s = 0; s < ringSides; s++)
+                for (int ring = 0; ring < profileY.Length - 1; ring++)
                 {
-                    int next = (s + 1) % ringSides;
-                    leafTris.Add(start + s);
-                    leafTris.Add(start + next);
-                    leafTris.Add(apex);
+                    int lower = start + ring * ringSides;
+                    int upper = lower + ringSides;
+                    for (int s = 0; s < ringSides; s++)
+                    {
+                        int next = (s + 1) % ringSides;
+                        leafTris.Add(lower + s);
+                        leafTris.Add(upper + s);
+                        leafTris.Add(lower + next);
+                        leafTris.Add(lower + next);
+                        leafTris.Add(upper + s);
+                        leafTris.Add(upper + next);
+                    }
                 }
             }
 
@@ -746,6 +802,7 @@ namespace PixBand.EditorTools
             float groundY = Height(MansionX, MansionZ);
             GameObject root = new GameObject("Mansion");
             root.transform.position = new Vector3(MansionX, groundY, MansionZ);
+            root.AddComponent<MansionInteriorFog>();
 
             const float floorTop = 0.25f;
             const float wallHeight = 5.6f;
@@ -802,6 +859,7 @@ namespace PixBand.EditorTools
             CreateBox(root.transform, "Window_Front_R", new Vector3(1.2f, 1.8f, 0.04f), new Vector3(3.3f, 3.5f, -4.74f), windowGlow);
             CreateBox(root.transform, "Window_Side_L", new Vector3(0.04f, 1.8f, 1.2f), new Vector3(-5.24f, 3.5f, 0f), windowGlow);
             CreateBox(root.transform, "Window_Side_R", new Vector3(0.04f, 1.8f, 1.2f), new Vector3(5.24f, 3.5f, 0f), windowGlow);
+            BuildGhostAudience(root.transform, wood);
 
             // Porch.
             CreateBox(root.transform, "Step", new Vector3(4.6f, 0.25f, 1.4f), new Vector3(0f, 0.12f, -5.2f), stone);
@@ -819,17 +877,22 @@ namespace PixBand.EditorTools
             porch.color = new Color(1f, 0.62f, 0.28f);
             porch.shadows = LightShadows.None;
 
+            BuildEntranceCat(root.transform);
+
             // Interior: riser, rug, two flickering lanterns.
             CreateBox(root.transform, "Riser", new Vector3(3.6f, 0.2f, 3.0f), new Vector3(0f, floorTop + 0.1f, 0.6f), wood);
             Material rug = MakeStandard("Rug_Red", new Color(0.16f, 0.035f, 0.035f), 0.02f);
             ApplySurfaceTexture(rug, "Mansion_Rug_Woven", "fabric", new Color(0.055f, 0.012f, 0.018f), new Color(0.28f, 0.055f, 0.045f), new Vector2(3f, 2f), 0f, 0.04f);
             CreateBox(root.transform, "Rug", new Vector3(4.2f, 0.02f, 2.2f), new Vector3(0f, floorTop + 0.01f, -2.3f), rug);
 
-            BuildInteriorLantern(root.transform, new Vector3(-3.4f, 3.35f, -0.4f), lanternGlow);
-            BuildInteriorLantern(root.transform, new Vector3(3.4f, 3.35f, 0.4f), lanternGlow);
+            BuildInteriorLantern(root.transform, new Vector3(-3.4f, 3.35f, -0.4f), lanternGlow, wood);
+            BuildInteriorLantern(root.transform, new Vector3(3.4f, 3.35f, 0.4f), lanternGlow, wood);
             BuildInteriorLights(root.transform);
-            BuildSkeleton(root.transform, "Skeleton_Left", new Vector3(-3.68f, floorTop, 1.0f), false, bone, socket);
-            BuildSkeleton(root.transform, "Skeleton_Right", new Vector3(3.68f, floorTop, 1.0f), true, bone, socket);
+            // Both supplied dancers are the anatomical skeleton, driven by
+            // SkeletonModelDancer through its imported bone names.
+            float skeletonBase = floorTop;
+            BuildSkeletonModel(root.transform, "Skeleton_Left", new Vector3(-3.68f, skeletonBase, 1.0f), 180f, 0f);
+            BuildSkeletonModel(root.transform, "Skeleton_Right", new Vector3(3.68f, skeletonBase, 1.0f), 180f, 0.62f);
 
             return root.transform.position + new Vector3(0f, floorTop + 1.95f, 0.6f);
         }
@@ -863,52 +926,314 @@ namespace PixBand.EditorTools
             fill.renderMode = LightRenderMode.ForcePixel;
         }
 
-        private static void BuildSkeleton(Transform parent, string name, Vector3 localPosition, bool slumped, Material bone, Material socket)
+        private static SkeletonDancer BuildSkeleton(
+            Transform parent, string name, Vector3 localPosition, bool slumped, Material bone, Material socket)
         {
             GameObject root = new GameObject(name);
             root.transform.SetParent(parent, false);
             root.transform.localPosition = localPosition;
             root.transform.localRotation = Quaternion.Euler(0f, slumped ? 165f : 195f, slumped ? -8f : 6f);
 
-            CreateSkeletonSphere(root.transform, "Pelvis", new Vector3(0f, 0.72f, 0f), new Vector3(0.32f, 0.2f, 0.2f), bone);
-            CreateSkeletonBone(root.transform, "Spine_Lower", new Vector3(0f, 0.78f, 0f), new Vector3(0f, 1.04f, 0f), 0.055f, bone);
-            CreateSkeletonBone(root.transform, "Spine_Upper", new Vector3(0f, 1.03f, 0f), new Vector3(0f, 1.27f, 0f), 0.05f, bone);
-            CreateSkeletonBone(root.transform, "Neck", new Vector3(0f, 1.24f, 0f), new Vector3(0f, 1.42f, 0f), 0.045f, bone);
-            CreateSkeletonSphere(root.transform, "Skull", new Vector3(0f, 1.57f, 0.015f), new Vector3(0.23f, 0.26f, 0.2f), bone);
-            CreateSkeletonBone(root.transform, "Jaw", new Vector3(-0.11f, 1.48f, 0.11f), new Vector3(0.11f, 1.48f, 0.11f), 0.035f, bone);
+            // Joint pivots instead of a flat pile of capsules: the dancer rotates
+            // these, and each pivot owns one combined mesh so the whole skeleton
+            // stays at roughly a dozen draw calls.
+            GameObject hips = new GameObject("Hips");
+            hips.transform.SetParent(root.transform, false);
+            hips.transform.localPosition = new Vector3(0f, 0.72f, 0f);
+            CreateSkeletonSphere(hips.transform, "Pelvis", Vector3.zero, new Vector3(0.32f, 0.2f, 0.2f), bone);
 
-            // Dark eye sockets and a nasal cavity give the skull a readable face.
-            CreateSkeletonSphere(root.transform, "EyeSocket_L", new Vector3(-0.075f, 1.59f, 0.184f), new Vector3(0.052f, 0.063f, 0.025f), socket);
-            CreateSkeletonSphere(root.transform, "EyeSocket_R", new Vector3(0.075f, 1.59f, 0.184f), new Vector3(0.052f, 0.063f, 0.025f), socket);
-            CreateSkeletonSphere(root.transform, "Nose_Cavity", new Vector3(0f, 1.51f, 0.187f), new Vector3(0.035f, 0.055f, 0.02f), socket);
+            GameObject spine = new GameObject("Spine");
+            spine.transform.SetParent(hips.transform, false);
+            spine.transform.localPosition = new Vector3(0f, 0.06f, 0f);
+            spine.transform.localRotation = Quaternion.Euler(slumped ? 9f : 1.5f, 0f, 0f);
+
+            CreateSkeletonBone(spine.transform, "Spine_Lower", Vector3.zero, new Vector3(0f, 0.26f, 0f), 0.055f, bone);
+            CreateSkeletonBone(spine.transform, "Spine_Upper", new Vector3(0f, 0.25f, 0f), new Vector3(0f, 0.49f, 0f), 0.05f, bone);
 
             for (int rib = 0; rib < 3; rib++)
             {
-                float y = 0.94f + rib * 0.11f;
+                float y = 0.16f + rib * 0.11f;
                 float width = 0.25f - rib * 0.025f;
-                CreateSkeletonBone(root.transform, "Rib_L_" + rib, new Vector3(-0.025f, y, 0f), new Vector3(-width, y - 0.04f, 0.015f), 0.028f, bone);
-                CreateSkeletonBone(root.transform, "Rib_R_" + rib, new Vector3(0.025f, y, 0f), new Vector3(width, y - 0.04f, 0.015f), 0.028f, bone);
+                CreateSkeletonBone(spine.transform, "Rib_L_" + rib, new Vector3(-0.025f, y, 0f), new Vector3(-width, y - 0.04f, 0.015f), 0.028f, bone);
+                CreateSkeletonBone(spine.transform, "Rib_R_" + rib, new Vector3(0.025f, y, 0f), new Vector3(width, y - 0.04f, 0.015f), 0.028f, bone);
             }
-            CreateSkeletonBone(root.transform, "Clavicle_L", new Vector3(0f, 1.25f, 0f), new Vector3(-0.25f, 1.22f, 0f), 0.035f, bone);
-            CreateSkeletonBone(root.transform, "Clavicle_R", new Vector3(0f, 1.25f, 0f), new Vector3(0.25f, 1.22f, 0f), 0.035f, bone);
+            CreateSkeletonBone(spine.transform, "Clavicle_L", new Vector3(0f, 0.47f, 0f), new Vector3(-0.25f, 0.44f, 0f), 0.035f, bone);
+            CreateSkeletonBone(spine.transform, "Clavicle_R", new Vector3(0f, 0.47f, 0f), new Vector3(0.25f, 0.44f, 0f), 0.035f, bone);
 
-            float leftHand = slumped ? -0.55f : -0.48f;
-            float rightHand = slumped ? 0.35f : 0.58f;
-            CreateSkeletonBone(root.transform, "Arm_L_Upper", new Vector3(-0.25f, 1.2f, 0f), new Vector3(-0.37f, 0.92f, 0f), 0.045f, bone);
-            CreateSkeletonBone(root.transform, "Arm_L_Fore", new Vector3(-0.37f, 0.92f, 0f), new Vector3(leftHand, 0.64f, 0.08f), 0.035f, bone);
-            CreateSkeletonSphere(root.transform, "Hand_L", new Vector3(leftHand, 0.62f, 0.08f), new Vector3(0.09f, 0.07f, 0.06f), bone);
-            CreateSkeletonBone(root.transform, "Arm_R_Upper", new Vector3(0.25f, 1.2f, 0f), new Vector3(0.36f, 0.92f, 0f), 0.045f, bone);
-            CreateSkeletonBone(root.transform, "Arm_R_Fore", new Vector3(0.36f, 0.92f, 0f), new Vector3(rightHand, 0.64f, 0.08f), 0.035f, bone);
-            CreateSkeletonSphere(root.transform, "Hand_R", new Vector3(rightHand, 0.62f, 0.08f), new Vector3(0.09f, 0.07f, 0.06f), bone);
+            GameObject neck = new GameObject("Neck");
+            neck.transform.SetParent(spine.transform, false);
+            neck.transform.localPosition = new Vector3(0f, 0.46f, 0f);
+            neck.transform.localRotation = Quaternion.Euler(slumped ? 14f : 2f, 0f, 0f);
 
-            CreateSkeletonBone(root.transform, "Leg_L_Upper", new Vector3(-0.11f, 0.69f, 0f), new Vector3(-0.18f, 0.37f, 0f), 0.06f, bone);
-            CreateSkeletonBone(root.transform, "Leg_L_Lower", new Vector3(-0.18f, 0.37f, 0f), new Vector3(-0.16f, 0.08f, 0.04f), 0.042f, bone);
-            CreateSkeletonBone(root.transform, "Foot_L", new Vector3(-0.16f, 0.08f, 0.04f), new Vector3(-0.31f, 0.05f, 0.22f), 0.04f, bone);
-            CreateSkeletonBone(root.transform, "Leg_R_Upper", new Vector3(0.11f, 0.69f, 0f), new Vector3(0.18f, 0.37f, 0f), 0.06f, bone);
-            CreateSkeletonBone(root.transform, "Leg_R_Lower", new Vector3(0.18f, 0.37f, 0f), new Vector3(0.16f, 0.08f, 0.04f), 0.042f, bone);
-            CreateSkeletonBone(root.transform, "Foot_R", new Vector3(0.16f, 0.08f, 0.04f), new Vector3(0.31f, 0.05f, 0.22f), 0.04f, bone);
+            CreateSkeletonBone(neck.transform, "Neck_Bone", Vector3.zero, new Vector3(0f, 0.18f, 0f), 0.045f, bone);
+            CreateSkeletonSphere(neck.transform, "Skull", new Vector3(0f, 0.33f, 0.015f), new Vector3(0.23f, 0.26f, 0.2f), bone);
+            CreateSkeletonBone(neck.transform, "Jaw", new Vector3(-0.11f, 0.24f, 0.11f), new Vector3(0.11f, 0.24f, 0.11f), 0.035f, bone);
+            CreateSkeletonSphere(neck.transform, "EyeSocket_L", new Vector3(-0.075f, 0.35f, 0.184f), new Vector3(0.052f, 0.063f, 0.025f), socket);
+            CreateSkeletonSphere(neck.transform, "EyeSocket_R", new Vector3(0.075f, 0.35f, 0.184f), new Vector3(0.052f, 0.063f, 0.025f), socket);
+            CreateSkeletonSphere(neck.transform, "Nose_Cavity", new Vector3(0f, 0.27f, 0.187f), new Vector3(0.035f, 0.055f, 0.02f), socket);
 
-            CombineSkeletonMeshes(root.transform);
+            GameObject shoulderLeft = BuildArm(spine.transform, "Shoulder_L", new Vector3(-0.25f, 0.42f, 0f), -1f, slumped, bone);
+            GameObject shoulderRight = BuildArm(spine.transform, "Shoulder_R", new Vector3(0.25f, 0.42f, 0f), 1f, slumped, bone);
+            Transform elbowLeft = shoulderLeft.transform.Find("Elbow_L");
+            Transform elbowRight = shoulderRight.transform.Find("Elbow_R");
+
+            GameObject hipLeft = BuildLeg(hips.transform, "Hip_L", new Vector3(-0.11f, -0.03f, 0f), -1f, bone);
+            GameObject hipRight = BuildLeg(hips.transform, "Hip_R", new Vector3(0.11f, -0.03f, 0f), 1f, bone);
+            Transform kneeLeft = hipLeft.transform.Find("Knee_L");
+            Transform kneeRight = hipRight.transform.Find("Knee_R");
+
+            // One merged mesh per pivot, so animation does not multiply draw calls.
+            CombineJointGeometry(hips.transform, name + "_Hips");
+            CombineJointGeometry(spine.transform, name + "_Spine");
+            CombineJointGeometry(neck.transform, name + "_Skull");
+            CombineJointGeometry(shoulderLeft.transform, name + "_ArmL");
+            CombineJointGeometry(shoulderRight.transform, name + "_ArmR");
+            CombineJointGeometry(elbowLeft, name + "_ForeL");
+            CombineJointGeometry(elbowRight, name + "_ForeR");
+            CombineJointGeometry(hipLeft.transform, name + "_LegL");
+            CombineJointGeometry(hipRight.transform, name + "_LegR");
+            CombineJointGeometry(kneeLeft, name + "_ShinL");
+            CombineJointGeometry(kneeRight, name + "_ShinR");
+
+            SkeletonDancer dancer = root.AddComponent<SkeletonDancer>();
+            dancer.hips = hips.transform;
+            dancer.spine = spine.transform;
+            dancer.neck = neck.transform;
+            dancer.shoulderLeft = shoulderLeft.transform;
+            dancer.shoulderRight = shoulderRight.transform;
+            dancer.elbowLeft = elbowLeft;
+            dancer.elbowRight = elbowRight;
+            dancer.hipLeft = hipLeft.transform;
+            dancer.hipRight = hipRight.transform;
+            dancer.kneeLeft = kneeLeft;
+            dancer.kneeRight = kneeRight;
+            dancer.phaseOffset = slumped ? 0.7f : 0f;
+            return dancer;
+        }
+
+        /// <summary>
+        /// Instantiate the supplied anatomical skeleton, normalise it to human
+        /// height with its feet on the floor, and hand its imported bones to
+        /// SkeletonModelDancer. Falls back to the procedural rig if the model
+        /// asset is missing.
+        /// </summary>
+        private static void BuildSkeletonModel(
+            Transform parent, string name, Vector3 localPosition, float yaw, float phaseOffset)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(SkeletonModelPath);
+            if (prefab == null)
+            {
+                Debug.LogWarning("[PixBand] Skeleton model missing at " + SkeletonModelPath + "; using procedural fallback.");
+                Material fallbackBone = AssetDatabase.LoadAssetAtPath<Material>(MaterialsDir + "/Bone_Aged.mat");
+                Material fallbackSocket = AssetDatabase.LoadAssetAtPath<Material>(MaterialsDir + "/Skeleton_Socket_Shadow.mat");
+                BuildSkeleton(parent, name, localPosition, yaw > 90f, fallbackBone, fallbackSocket);
+                return;
+            }
+
+            GameObject root = new GameObject(name);
+            root.transform.SetParent(parent, false);
+            root.transform.position = Vector3.zero;
+            root.transform.rotation = Quaternion.identity;
+
+            GameObject model = (GameObject)PrefabUtility.InstantiatePrefab(prefab, root.transform);
+            model.name = name + "_Model";
+            model.transform.localPosition = Vector3.zero;
+            model.transform.localRotation = Quaternion.identity;
+
+            // The raw asset is about 18 m tall (Poser units); scale relative to
+            // the current hierarchy so any baked root scale is preserved.
+            Bounds bounds = CalculateBounds(model);
+            float ratio = 1.78f / Mathf.Max(0.01f, bounds.size.y);
+            model.transform.localScale = model.transform.localScale * ratio;
+
+            bounds = CalculateBounds(model);
+            model.transform.localPosition = new Vector3(-bounds.center.x, -bounds.min.y, -bounds.center.z);
+
+            Renderer[] renderers = model.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                renderers[i].shadowCastingMode = ShadowCastingMode.Off;
+                renderers[i].receiveShadows = false;
+            }
+
+            root.transform.localPosition = localPosition;
+            root.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
+
+            SkeletonModelDancer dancer = root.AddComponent<SkeletonModelDancer>();
+            dancer.phaseOffset = phaseOffset;
+            dancer.Bind(model.transform);
+        }
+
+        /// <summary>
+        /// The animated entrance cat. It sits on the porch step, loops its
+        /// grooming clip, and can be petted for a purr and a meow. Petting is
+        /// cosmetic and never gates the skeleton dance.
+        /// </summary>
+        private static void BuildEntranceCat(Transform parent)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CatModelPath);
+            if (prefab == null)
+            {
+                Debug.LogWarning("[PixBand] Cat model missing at " + CatModelPath);
+                return;
+            }
+
+            GameObject root = new GameObject("Entrance_Cat");
+            root.transform.SetParent(parent, false);
+            root.transform.position = Vector3.zero;
+            root.transform.rotation = Quaternion.identity;
+
+            GameObject model = (GameObject)PrefabUtility.InstantiatePrefab(prefab, root.transform);
+            model.name = "Cat_Model";
+            model.transform.localPosition = Vector3.zero;
+            model.transform.localRotation = Quaternion.identity;
+
+            Bounds bounds = CalculateBoneBounds(model);
+            float ratio = 0.52f / Mathf.Max(0.01f, bounds.size.y);
+            model.transform.localScale = model.transform.localScale * ratio;
+
+            bounds = CalculateBoneBounds(model);
+            model.transform.localPosition = new Vector3(-bounds.center.x, -bounds.min.y, -bounds.center.z);
+            bounds = CalculateBoneBounds(model);
+
+            BoxCollider collider = root.AddComponent<BoxCollider>();
+            collider.center = bounds.center;
+            collider.size = new Vector3(bounds.size.x * 1.12f, bounds.size.y * 1.04f, bounds.size.z * 1.12f);
+
+            root.transform.localPosition = new Vector3(1.35f, 0.245f, -5.05f);
+            root.transform.localRotation = Quaternion.Euler(0f, -90f, 0f);
+
+            AudioSource source = root.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.spatialBlend = 0.55f;
+            source.rolloffMode = AudioRolloffMode.Linear;
+            source.minDistance = 0.6f;
+            source.maxDistance = 12f;
+
+            root.AddComponent<XRSimpleInteractable>();
+
+            PetableCat cat = root.AddComponent<PetableCat>();
+            cat.purrClip = AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Cat/Purr.wav");
+            cat.meows = new[]
+            {
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Cat/CatMeow_Cute.mp3"),
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Cat/CatMeow_Soft.mp3")
+            };
+
+            Animation animation = model.GetComponent<Animation>();
+            if (animation == null) animation = model.AddComponent<Animation>();
+            AnimationClip clip = animation.clip;
+            if (clip == null) clip = FindAnimationClip(prefab);
+            if (clip != null)
+            {
+                if (animation.GetClip(clip.name) == null) animation.AddClip(clip, clip.name);
+                animation.clip = clip;
+                animation.wrapMode = WrapMode.Loop;
+            }
+            cat.idleAnimation = animation;
+            cat.idleClip = clip;
+        }
+
+        private static AnimationClip FindAnimationClip(GameObject prefab)
+        {
+            string path = AssetDatabase.GetAssetPath(prefab);
+            Object[] assets = AssetDatabase.LoadAllAssetsAtPath(path);
+            for (int i = 0; i < assets.Length; i++)
+            {
+                AnimationClip clip = assets[i] as AnimationClip;
+                // Legacy import also exposes a "__preview__" clip for the
+                // inspector; the real take is the one without the prefix.
+                if (clip != null && !clip.name.StartsWith("__preview__")) return clip;
+            }
+            return null;
+        }
+
+        private static GameObject BuildArm(
+            Transform parent, string name, Vector3 localPosition, float side, bool slumped, Material bone)
+        {
+            GameObject shoulder = new GameObject(name);
+            shoulder.transform.SetParent(parent, false);
+            shoulder.transform.localPosition = localPosition;
+            shoulder.transform.localRotation = Quaternion.Euler(0f, 0f, side * (slumped ? -16f : -4f));
+
+            float handX = side * 0.12f;
+            CreateSkeletonBone(shoulder.transform, "Arm_Upper",
+                Vector3.zero, new Vector3(handX, -0.28f, 0f), 0.045f, bone);
+
+            GameObject elbow = new GameObject("Elbow_" + name.Substring(name.Length - 1));
+            elbow.transform.SetParent(shoulder.transform, false);
+            elbow.transform.localPosition = new Vector3(handX, -0.28f, 0f);
+            elbow.transform.localRotation = Quaternion.Euler(slumped ? -22f : -8f, 0f, 0f);
+
+            Vector3 hand = new Vector3(side * 0.11f, -0.30f, 0.08f);
+            CreateSkeletonBone(elbow.transform, "Arm_Fore", Vector3.zero, hand, 0.035f, bone);
+            CreateSkeletonSphere(elbow.transform, "Hand", hand, new Vector3(0.09f, 0.07f, 0.06f), bone);
+            return shoulder;
+        }
+
+        private static GameObject BuildLeg(
+            Transform parent, string name, Vector3 localPosition, float side, Material bone)
+        {
+            GameObject hip = new GameObject(name);
+            hip.transform.SetParent(parent, false);
+            hip.transform.localPosition = localPosition;
+
+            Vector3 kneePosition = new Vector3(side * 0.07f, -0.32f, 0f);
+            CreateSkeletonBone(hip.transform, "Leg_Upper", Vector3.zero, kneePosition, 0.06f, bone);
+
+            GameObject knee = new GameObject("Knee_" + name.Substring(name.Length - 1));
+            knee.transform.SetParent(hip.transform, false);
+            knee.transform.localPosition = kneePosition;
+
+            Vector3 ankle = new Vector3(-side * 0.02f, -0.29f, 0.04f);
+            CreateSkeletonBone(knee.transform, "Leg_Lower", Vector3.zero, ankle, 0.042f, bone);
+            CreateSkeletonBone(knee.transform, "Foot", ankle, ankle + new Vector3(-side * 0.15f, -0.03f, 0.18f), 0.04f, bone);
+            return hip;
+        }
+
+        /// <summary>Merge every mesh directly under one pivot into a single renderer.</summary>
+        private static void CombineJointGeometry(Transform joint, string name)
+        {
+            if (joint == null) return;
+
+            Dictionary<Material, List<CombineInstance>> groups = new Dictionary<Material, List<CombineInstance>>();
+            List<Transform> parts = new List<Transform>();
+
+            for (int i = 0; i < joint.childCount; i++)
+            {
+                Transform child = joint.GetChild(i);
+                MeshFilter filter = child.GetComponent<MeshFilter>();
+                MeshRenderer renderer = child.GetComponent<MeshRenderer>();
+                if (filter == null || renderer == null || filter.sharedMesh == null || renderer.sharedMaterial == null)
+                    continue;
+
+                Material material = renderer.sharedMaterial;
+                if (!groups.ContainsKey(material)) groups[material] = new List<CombineInstance>();
+                CombineInstance instance = new CombineInstance();
+                instance.mesh = filter.sharedMesh;
+                instance.transform = joint.worldToLocalMatrix * child.localToWorldMatrix;
+                groups[material].Add(instance);
+                parts.Add(child);
+            }
+
+            int index = 0;
+            foreach (KeyValuePair<Material, List<CombineInstance>> group in groups)
+            {
+                Mesh mesh = new Mesh();
+                mesh.name = name + "_" + group.Key.name;
+                mesh.CombineMeshes(group.Value.ToArray(), true, true);
+
+                GameObject combined = new GameObject(name + "_Mesh_" + index++);
+                combined.transform.SetParent(joint, false);
+                combined.AddComponent<MeshFilter>().sharedMesh = mesh;
+                MeshRenderer renderer = combined.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial = group.Key;
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+            }
+
+            for (int i = 0; i < parts.Count; i++)
+                if (parts[i] != null) Object.DestroyImmediate(parts[i].gameObject);
         }
 
         private static GameObject CreateSkeletonSphere(Transform parent, string name, Vector3 position, Vector3 scale, Material material)
@@ -943,50 +1268,251 @@ namespace PixBand.EditorTools
             return part;
         }
 
-        private static void CombineSkeletonMeshes(Transform root)
+        /// <summary>
+        /// Spectral audience in the drum-room windows. The panes sit on the
+        /// inside face of the walls, because the player plays from inside the
+        /// mansion: ghosts painted on the exterior windows would never be seen.
+        /// </summary>
+        private static void BuildGhostAudience(Transform parent, Material frameMaterial)
         {
-            Dictionary<Material, List<CombineInstance>> groups = new Dictionary<Material, List<CombineInstance>>();
-            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>(true);
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                MeshRenderer renderer = renderers[i];
-                MeshFilter filter = renderer.GetComponent<MeshFilter>();
-                if (filter == null || filter.sharedMesh == null || renderer.sharedMaterial == null) continue;
+            Material ghostMaterial = MakeGhostMaterial();
+            Material paneMaterial = MakeEmissive("Ghost_Window_Glow",
+                new Color(0.045f, 0.075f, 0.09f), new Color(0.11f, 0.25f, 0.31f));
 
-                Material material = renderer.sharedMaterial;
-                if (!groups.ContainsKey(material)) groups[material] = new List<CombineInstance>();
-                CombineInstance instance = new CombineInstance();
-                instance.mesh = filter.sharedMesh;
-                instance.transform = root.worldToLocalMatrix * renderer.transform.localToWorldMatrix;
-                groups[material].Add(instance);
-            }
+            GameObject group = new GameObject("Ghost_Audience");
+            group.transform.SetParent(parent, false);
 
-            foreach (KeyValuePair<Material, List<CombineInstance>> group in groups)
-            {
-                Mesh mesh = new Mesh();
-                mesh.name = root.name + "_" + group.Key.name;
-                mesh.indexFormat = IndexFormat.UInt32;
-                mesh.CombineMeshes(group.Value.ToArray(), true, true);
-                GameObject combined = new GameObject(mesh.name);
-                combined.transform.SetParent(root, false);
-                combined.AddComponent<MeshFilter>().sharedMesh = mesh;
-                MeshRenderer renderer = combined.AddComponent<MeshRenderer>();
-                renderer.sharedMaterial = group.Key;
-                renderer.shadowCastingMode = ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
-            }
+            List<Renderer> renderers = new List<Renderer>();
 
-            for (int i = 0; i < renderers.Length; i++)
-                if (renderers[i] != null) Object.DestroyImmediate(renderers[i].gameObject);
+            // Behind the kit: the two panes the drummer looks straight at.
+            CreateBox(group.transform, "Ghost_Window_Back_L", new Vector3(1.3f, 1.9f, 0.04f),
+                new Vector3(-2.4f, 3.1f, 3.98f), paneMaterial);
+            CreateBox(group.transform, "Ghost_Window_Back_R", new Vector3(1.3f, 1.9f, 0.04f),
+                new Vector3(2.4f, 3.1f, 3.98f), paneMaterial);
+            AddWindowFrame(group.transform, "Ghost_Frame_Back_L", new Vector3(-2.4f, 3.1f, 3.89f), false, frameMaterial);
+            AddWindowFrame(group.transform, "Ghost_Frame_Back_R", new Vector3(2.4f, 3.1f, 3.89f), false, frameMaterial);
+            AddGhostQuad(group.transform, "Ghost_Back_L", new Vector3(-2.4f, 3.02f, 3.93f), Quaternion.identity, ghostMaterial, renderers);
+            AddGhostQuad(group.transform, "Ghost_Back_R", new Vector3(2.4f, 3.02f, 3.93f), Quaternion.identity, ghostMaterial, renderers);
+
+            // Side walls, lined up with the real windows outside.
+            CreateBox(group.transform, "Ghost_Window_Side_L", new Vector3(0.04f, 1.9f, 1.3f),
+                new Vector3(-4.48f, 3.1f, 0f), paneMaterial);
+            CreateBox(group.transform, "Ghost_Window_Side_R", new Vector3(0.04f, 1.9f, 1.3f),
+                new Vector3(4.48f, 3.1f, 0f), paneMaterial);
+            AddWindowFrame(group.transform, "Ghost_Frame_Side_L", new Vector3(-4.40f, 3.1f, 0f), true, frameMaterial);
+            AddWindowFrame(group.transform, "Ghost_Frame_Side_R", new Vector3(4.40f, 3.1f, 0f), true, frameMaterial);
+            AddGhostQuad(group.transform, "Ghost_Side_L", new Vector3(-4.44f, 3.02f, 0f), Quaternion.Euler(0f, -90f, 0f), ghostMaterial, renderers);
+            AddGhostQuad(group.transform, "Ghost_Side_R", new Vector3(4.44f, 3.02f, 0f), Quaternion.Euler(0f, 90f, 0f), ghostMaterial, renderers);
+
+            GhostAudience audience = group.AddComponent<GhostAudience>();
+            audience.silhouettes = renderers.ToArray();
+            audience.comboThreshold = 6;
+            audience.maxOpacity = 0.72f;
         }
 
-        private static void BuildInteriorLantern(Transform parent, Vector3 localPosition, Material glow)
+        /// <summary>Window casing and mullions so the ghost panes read as windows.</summary>
+        private static void AddWindowFrame(
+            Transform parent, string name, Vector3 center, bool alongZ, Material frame)
+        {
+            if (alongZ)
+            {
+                CreateBox(parent, name + "_V0", new Vector3(0.06f, 2.0f, 0.10f), center + new Vector3(0f, 0f, -0.65f), frame);
+                CreateBox(parent, name + "_V1", new Vector3(0.06f, 2.0f, 0.10f), center + new Vector3(0f, 0f, 0.65f), frame);
+                CreateBox(parent, name + "_H0", new Vector3(0.06f, 0.10f, 1.3f), center + new Vector3(0f, -0.95f, 0f), frame);
+                CreateBox(parent, name + "_H1", new Vector3(0.06f, 0.10f, 1.3f), center + new Vector3(0f, 0.95f, 0f), frame);
+                CreateBox(parent, name + "_M0", new Vector3(0.05f, 1.9f, 0.05f), center, frame);
+                CreateBox(parent, name + "_M1", new Vector3(0.06f, 0.05f, 1.3f), center, frame);
+            }
+            else
+            {
+                CreateBox(parent, name + "_V0", new Vector3(0.10f, 2.0f, 0.06f), center + new Vector3(-0.65f, 0f, 0f), frame);
+                CreateBox(parent, name + "_V1", new Vector3(0.10f, 2.0f, 0.06f), center + new Vector3(0.65f, 0f, 0f), frame);
+                CreateBox(parent, name + "_H0", new Vector3(1.3f, 0.10f, 0.06f), center + new Vector3(0f, -0.95f, 0f), frame);
+                CreateBox(parent, name + "_H1", new Vector3(1.3f, 0.10f, 0.06f), center + new Vector3(0f, 0.95f, 0f), frame);
+                CreateBox(parent, name + "_M0", new Vector3(0.05f, 1.9f, 0.05f), center, frame);
+                CreateBox(parent, name + "_M1", new Vector3(1.3f, 0.05f, 0.06f), center, frame);
+            }
+        }
+
+        private static void AddGhostQuad(
+            Transform parent, string name, Vector3 localPosition, Quaternion localRotation,
+            Material material, List<Renderer> renderers)
+        {
+            GameObject quad = new GameObject(name);
+            quad.transform.SetParent(parent, false);
+            quad.transform.localPosition = localPosition;
+            quad.transform.localRotation = localRotation;
+            quad.transform.localScale = new Vector3(1.05f, 1.6f, 1f);
+
+            quad.AddComponent<MeshFilter>().sharedMesh = GhostQuadMesh();
+
+            MeshRenderer renderer = quad.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderers.Add(renderer);
+        }
+
+        private static Mesh ghostQuadMesh;
+
+        /// <summary>
+        /// Unit quad with explicit white vertex colours, because the sprite
+        /// shader multiplies by vertex colour and a mesh without a colour
+        /// channel can read as black on some Quest drivers.
+        /// </summary>
+        private static Mesh GhostQuadMesh()
+        {
+            const string path = "Assets/Art/GhostQuad.asset";
+            Mesh existing = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+            if (existing != null)
+            {
+                ghostQuadMesh = existing;
+                return existing;
+            }
+
+            Mesh mesh = new Mesh();
+            mesh.name = "GhostQuad";
+            mesh.vertices = new[]
+            {
+                new Vector3(-0.5f, -0.5f, 0f),
+                new Vector3(0.5f, -0.5f, 0f),
+                new Vector3(-0.5f, 0.5f, 0f),
+                new Vector3(0.5f, 0.5f, 0f)
+            };
+            mesh.uv = new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(1f, 0f),
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f)
+            };
+            mesh.colors = new[] { Color.white, Color.white, Color.white, Color.white };
+            mesh.normals = new[] { Vector3.back, Vector3.back, Vector3.back, Vector3.back };
+            mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+            mesh.hideFlags = HideFlags.None;
+
+            EnsureFolder("Assets/Art");
+            AssetDatabase.CreateAsset(mesh, path);
+            ghostQuadMesh = mesh;
+            return mesh;
+        }
+
+        private static void WirePadVisuals(DrumPad[] pads, Material ringMaterial)
+        {
+            for (int i = 0; i < pads.Length; i++)
+            {
+                DrumPad pad = pads[i];
+                if (pad == null) continue;
+
+                // Prefab pads were serialized with head: {fileID: 0}; recover the
+                // visible mesh from the trigger's parent chain.
+                if (pad.head == null)
+                {
+                    Transform candidate = pad.transform.parent;
+                    while (candidate != null && candidate.GetComponent<Renderer>() == null)
+                        candidate = candidate.parent;
+                    pad.head = candidate;
+                }
+
+                bool cymbal = pad.gameObject.name.IndexOf("Circle", System.StringComparison.OrdinalIgnoreCase) >= 0;
+                pad.cymbal = cymbal;
+                pad.recoilDepth = 0.010f;
+                pad.ringMaterial = ringMaterial;
+                pad.impactTint = cymbal
+                    ? new Color(1f, 0.86f, 0.55f)
+                    : new Color(1f, 0.62f, 0.34f);
+
+                // Field edits on prefab-instance components are not part of the
+                // scene diff unless they are recorded explicitly.
+                if (PrefabUtility.IsPartOfPrefabInstance(pad))
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(pad);
+                EditorUtility.SetDirty(pad);
+            }
+        }
+
+        private static Material MakeRingMaterial()
+        {
+            Material material = MakeTintedMaterial("Drum_Impact_Ring", "Sprites/Default");
+            material.mainTexture = MakeImpactRingTexture();
+            material.color = Color.white;
+            EditorUtility.SetDirty(material);
+            return material;
+        }
+
+        private static Material MakeGhostMaterial()
+        {
+            Material material = MakeTintedMaterial("Ghost_Silhouette", "Sprites/Default");
+            material.mainTexture = MakeGhostTexture();
+            material.color = new Color(0.03f, 0.045f, 0.07f, 0.9f);
+            EditorUtility.SetDirty(material);
+            return material;
+        }
+
+        /// <summary>
+        /// Alpha-blended unlit material that exposes _Color, so renderers can
+        /// fade it per-object through a MaterialPropertyBlock. Reuses the asset
+        /// instead of deleting it: replacing the shader is enough.
+        /// </summary>
+        private static Material MakeTintedMaterial(string name, string shaderName)
+        {
+            Shader shader = Shader.Find(shaderName);
+            if (shader == null) shader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
+
+            string path = MaterialsDir + "/" + name + ".mat";
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (material == null)
+            {
+                material = new Material(shader);
+                material.name = name;
+                AssetDatabase.CreateAsset(material, path);
+            }
+            else if (material.shader != shader)
+            {
+                material.shader = shader;
+            }
+
+            return material;
+        }
+
+        private static void BuildInteriorLantern(Transform parent, Vector3 localPosition, Material glow, Material chainMaterial)
         {
             GameObject lantern = new GameObject("Interior_Lantern");
             lantern.transform.SetParent(parent, false);
             lantern.transform.localPosition = localPosition;
 
-            CreateBox(lantern.transform, "Glow", new Vector3(0.22f, 0.32f, 0.22f), Vector3.zero, glow);
+            // A visible rod tucks into the ceiling so the lanterns read as
+            // suspended fixtures instead of floating emissive cubes.
+            CreateBox(lantern.transform, "Hanging_Rod", new Vector3(0.045f, 1.75f, 0.045f),
+                new Vector3(0f, 0.98f, 0f), chainMaterial);
+
+            // The light itself: a small warm core inside an iron cage. A bare
+            // emissive cube reads as a flat yellow panel from across the room.
+            CreateBox(lantern.transform, "Glow", new Vector3(0.17f, 0.25f, 0.17f), Vector3.zero, glow);
+            CreateBox(lantern.transform, "Cage_Top", new Vector3(0.27f, 0.035f, 0.27f), new Vector3(0f, 0.15f, 0f), chainMaterial);
+            CreateBox(lantern.transform, "Cage_Bottom", new Vector3(0.27f, 0.035f, 0.27f), new Vector3(0f, -0.15f, 0f), chainMaterial);
+            CreateBox(lantern.transform, "Cage_Finial", new Vector3(0.09f, 0.06f, 0.09f), new Vector3(0f, 0.19f, 0f), chainMaterial);
+            for (int corner = 0; corner < 4; corner++)
+            {
+                float cx = (corner == 0 || corner == 3) ? -0.115f : 0.115f;
+                float cz = (corner < 2) ? -0.115f : 0.115f;
+                CreateBox(lantern.transform, "Cage_Post_" + corner, new Vector3(0.032f, 0.30f, 0.032f),
+                    new Vector3(cx, 0f, cz), chainMaterial);
+            }
+
+            // Soft halo so the cage does not look like a lit box.
+            Material halo = MakeParticleMaterial("Lantern_Halo", "Legacy Shaders/Particles/Additive");
+            halo.mainTexture = MakeSoftDotTexture("Lantern_Halo_Dot");
+            halo.SetColor("_TintColor", new Color(0.55f, 0.34f, 0.14f, 0.55f));
+            EditorUtility.SetDirty(halo);
+            GameObject haloGo = new GameObject("Halo");
+            haloGo.transform.SetParent(lantern.transform, false);
+            haloGo.transform.localScale = Vector3.one * 1.5f;
+            MeshFilter haloFilter = haloGo.AddComponent<MeshFilter>();
+            haloFilter.sharedMesh = GhostQuadMesh();
+            MeshRenderer haloRenderer = haloGo.AddComponent<MeshRenderer>();
+            haloRenderer.sharedMaterial = halo;
+            haloRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            haloRenderer.receiveShadows = false;
 
             Light light = lantern.AddComponent<Light>();
             light.type = LightType.Point;
@@ -1080,10 +1606,11 @@ namespace PixBand.EditorTools
             shape.shapeType = ParticleSystemShapeType.Box;
             shape.scale = new Vector3(55f, 5f, 70f);
 
-            Texture2D dot = MakeDotTexture();
-            Material mat = new Material(Shader.Find("Legacy Shaders/Particles/Additive"));
+            Texture2D dot = MakeSoftDotTexture("Firefly_Dot");
+            Material mat = MakeParticleMaterial("Firefly_Glow", "Legacy Shaders/Particles/Additive");
             mat.mainTexture = dot;
             mat.SetColor("_TintColor", new Color(0.7f, 1f, 0.6f, 1f));
+            EditorUtility.SetDirty(mat);
 
             ParticleSystemRenderer renderer = go.GetComponent<ParticleSystemRenderer>();
             renderer.material = mat;
@@ -1092,49 +1619,146 @@ namespace PixBand.EditorTools
             renderer.receiveShadows = false;
         }
 
-        private static void BuildFogLayer(string name, Vector3 position, Vector3 volume, int maxParticles, float alpha)
+        private static void BuildForestMist()
+        {
+            Texture2D smokeA = LoadSmokeSprite("Assets/Art/Textures/Kenney/whitePuff00.png");
+            Texture2D smokeB = LoadSmokeSprite("Assets/Art/Textures/Kenney/whitePuff07.png");
+            Texture2D smokeC = LoadSmokeSprite("Assets/Art/Textures/Kenney/whitePuff14.png");
+
+            Material mistA = MakeParticleMaterial("Forest_Mist_Particles", "Legacy Shaders/Particles/Alpha Blended");
+            mistA.mainTexture = smokeA;
+            mistA.SetColor("_TintColor", new Color(0.62f, 0.72f, 0.78f, 0.55f));
+            EditorUtility.SetDirty(mistA);
+
+            Material mistB = MakeParticleMaterial("Forest_Mist_Particles_B", "Legacy Shaders/Particles/Alpha Blended");
+            mistB.mainTexture = smokeB;
+            mistB.SetColor("_TintColor", new Color(0.55f, 0.66f, 0.72f, 0.5f));
+            EditorUtility.SetDirty(mistB);
+
+            Material haze = MakeParticleMaterial("Forest_Haze_Particles", "Legacy Shaders/Particles/Alpha Blended");
+            haze.mainTexture = smokeC;
+            haze.SetColor("_TintColor", new Color(0.5f, 0.6f, 0.7f, 0.42f));
+            EditorUtility.SetDirty(haze);
+
+            // Low, slow banks that hug the forest floor and drift across the path.
+            CreateAtmosphereParticles("Low_Forest_Mist_A", new Vector3(0f, 2.4f, 18f),
+                new Vector3(64f, 2.8f, 62f), 14, 26f, 46f,
+                7f, 13f, new Color(0.70f, 0.79f, 0.84f, 0.20f), mistA, 0.05f, 60f);
+            CreateAtmosphereParticles("Low_Forest_Mist_B", new Vector3(0f, 2.0f, 22f),
+                new Vector3(58f, 2.2f, 56f), 10, 22f, 40f,
+                5f, 10f, new Color(0.62f, 0.72f, 0.78f, 0.16f), mistB, 0.07f, 60f);
+
+            // A thin band above the trees so the far edge of the forest melts away.
+            CreateAtmosphereParticles("High_Forest_Haze", new Vector3(0f, 8.5f, 26f),
+                new Vector3(72f, 4.5f, 72f), 8, 34f, 56f,
+                14f, 24f, new Color(0.52f, 0.63f, 0.72f, 0.10f), haze, 0.03f, 80f);
+        }
+
+        private static Texture2D LoadSmokeSprite(string path)
+        {
+            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (texture == null)
+            {
+                Debug.LogWarning("[PixBand] Missing smoke sprite: " + path);
+                return MakeSoftDotTexture("Mist_Fallback_Dot");
+            }
+
+            TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer != null &&
+                (importer.wrapMode != TextureWrapMode.Clamp || !importer.alphaIsTransparency))
+            {
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.alphaIsTransparency = true;
+                importer.mipmapEnabled = true;
+                importer.SaveAndReimport();
+                texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            }
+
+            return texture;
+        }
+
+        private static void BuildNightSky()
+        {
+            Material moonMaterial = MakeEmissive("Moon_Ivory_Glow",
+                new Color(0.72f, 0.81f, 0.91f), new Color(0.34f, 0.43f, 0.58f));
+            GameObject moon = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            moon.name = "Moon";
+            moon.transform.position = new Vector3(-21f, 24f, 49f);
+            moon.transform.localScale = Vector3.one * 3.6f;
+            Object.DestroyImmediate(moon.GetComponent<Collider>());
+            moon.GetComponent<Renderer>().sharedMaterial = moonMaterial;
+            moon.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
+            moon.GetComponent<Renderer>().receiveShadows = false;
+
+            // A soft halo keeps the moon from reading as a hard white ball.
+            Material halo = MakeParticleMaterial("Moon_Halo", "Legacy Shaders/Particles/Additive");
+            halo.mainTexture = MakeSoftDotTexture("Star_Dot");
+            halo.SetColor("_TintColor", new Color(0.42f, 0.52f, 0.68f, 0.5f));
+            EditorUtility.SetDirty(halo);
+            CreateAtmosphereParticles("Moon_Halo", new Vector3(-21f, 24f, 49.4f),
+                new Vector3(0.1f, 0.1f, 0.1f), 1, 600f, 600f,
+                9f, 9f, new Color(0.55f, 0.68f, 0.85f, 0.30f), halo, 0f, 20f);
+
+            Material starMaterial = MakeParticleMaterial("Night_Sky_Stars", "Legacy Shaders/Particles/Additive");
+            starMaterial.mainTexture = MakeSoftDotTexture("Star_Dot");
+            starMaterial.SetColor("_TintColor", new Color(0.68f, 0.8f, 1f, 0.82f));
+            EditorUtility.SetDirty(starMaterial);
+            CreateAtmosphereParticles("Stars", new Vector3(0f, 26f, 16f),
+                new Vector3(88f, 14f, 96f), 220, 600f, 600f,
+                0.05f, 0.12f, new Color(0.78f, 0.86f, 1f, 0.75f), starMaterial, 0f, 2f);
+
+            Material cloudMaterial = MakeParticleMaterial("Night_Sky_Clouds", "Legacy Shaders/Particles/Alpha Blended");
+            cloudMaterial.mainTexture = LoadSmokeSprite("Assets/Art/Textures/Kenney/whitePuff14.png");
+            cloudMaterial.SetColor("_TintColor", new Color(0.40f, 0.48f, 0.60f, 0.30f));
+            EditorUtility.SetDirty(cloudMaterial);
+            CreateAtmosphereParticles("Thin_Night_Clouds", new Vector3(0f, 17f, 20f),
+                new Vector3(80f, 6f, 84f), 6, 60f, 90f,
+                16f, 27f, new Color(0.44f, 0.53f, 0.66f, 0.07f), cloudMaterial, 0.012f, 80f);
+        }
+
+        private static void CreateAtmosphereParticles(
+            string name, Vector3 position, Vector3 bounds, int count,
+            float minimumLifetime, float maximumLifetime,
+            float minimumSize, float maximumSize, Color color,
+            Material material, float driftSpeed, float maxParticleSize)
         {
             GameObject go = new GameObject(name);
             go.transform.position = position;
-
             ParticleSystem particles = go.AddComponent<ParticleSystem>();
             ParticleSystem.MainModule main = particles.main;
-            main.duration = 30f;
+            main.duration = 100f;
             main.loop = true;
-            main.startLifetime = new ParticleSystem.MinMaxCurve(18f, 34f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(0.012f, 0.05f);
-            bool interior = volume.x < 10f;
-            main.startSize = interior
-                ? new ParticleSystem.MinMaxCurve(2.0f, 3.6f)
-                : new ParticleSystem.MinMaxCurve(3.5f, 6.5f);
-            main.startColor = new Color(0.55f, 0.66f, 0.61f, alpha);
-            main.maxParticles = maxParticles;
+            main.prewarm = true;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(minimumLifetime, maximumLifetime);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(driftSpeed * 0.65f, driftSpeed * 1.35f);
+            main.startSize3D = false;
+            main.startSize = new ParticleSystem.MinMaxCurve(minimumSize, maximumSize);
+            main.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
+            main.startColor = color;
+            main.gravityModifier = 0f;
+            main.maxParticles = count;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.scalingMode = ParticleSystemScalingMode.Hierarchy;
+            main.playOnAwake = true;
 
             ParticleSystem.EmissionModule emission = particles.emission;
-            emission.rateOverTime = Mathf.Max(0.3f, maxParticles / 20f);
+            emission.rateOverTime = count / Mathf.Max(1f, (minimumLifetime + maximumLifetime) * 0.5f);
+            emission.SetBursts(new[] { new ParticleSystem.Burst(0f, (short)count) });
 
             ParticleSystem.ShapeModule shape = particles.shape;
             shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = volume;
-
-            ParticleSystem.VelocityOverLifetimeModule velocity = particles.velocityOverLifetime;
-            velocity.enabled = true;
-            velocity.x = new ParticleSystem.MinMaxCurve(-0.045f, 0.045f);
-            velocity.y = new ParticleSystem.MinMaxCurve(-0.015f, 0.025f);
-            velocity.z = new ParticleSystem.MinMaxCurve(-0.035f, 0.035f);
-
-            Texture2D soft = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Art/FireflyDot.asset");
-            Material material = MakeParticleMaterial("Soft_Mist", "Legacy Shaders/Particles/Alpha Blended");
-            if (soft != null) material.mainTexture = soft;
-            material.SetColor("_TintColor", Color.white);
+            shape.scale = bounds;
 
             ParticleSystemRenderer renderer = go.GetComponent<ParticleSystemRenderer>();
-            renderer.material = material;
+            renderer.sharedMaterial = material;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
+            renderer.alignment = ParticleSystemRenderSpace.View;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+            // The old build clamped every billboard to 0.35 m, which squashed
+            // the wide mist cards into the rectangles that read as fog boxes.
+            renderer.maxParticleSize = maxParticleSize;
+            renderer.minParticleSize = 0f;
+            renderer.sortingFudge = 0f;
         }
 
         private static void BuildAmbience()
@@ -1143,7 +1767,16 @@ namespace PixBand.EditorTools
             AudioSource source = go.AddComponent<AudioSource>();
             source.playOnAwake = false;
             WindAmbience wind = go.AddComponent<WindAmbience>();
-            wind.volume = 0.62f;
+            wind.ambienceClip = AssetDatabase.LoadAssetAtPath<AudioClip>(
+                "Assets/Audio/Horror/Ambience/Forest_Wind_Loop.mp3");
+            wind.howlClip = AssetDatabase.LoadAssetAtPath<AudioClip>(
+                "Assets/Audio/Horror/Ambience/Howling_Wind_CC0.mp3");
+            wind.volume = 0.40f;
+            wind.howlVolume = 0.12f;
+            wind.firstHowlMinimumDelay = 24f;
+            wind.firstHowlMaximumDelay = 38f;
+            wind.minimumHowlInterval = 48f;
+            wind.maximumHowlInterval = 78f;
             go.transform.position = new Vector3(0f, 3f, 15f);
 
             GameObject horror = new GameObject("Haunted_Ambience");
@@ -1151,8 +1784,35 @@ namespace PixBand.EditorTools
             AudioSource drone = horror.AddComponent<AudioSource>();
             drone.playOnAwake = false;
             HauntedAmbience haunted = horror.AddComponent<HauntedAmbience>();
-            haunted.droneVolume = 0.48f;
-            haunted.wailVolume = 0.34f;
+            haunted.howlClip = AssetDatabase.LoadAssetAtPath<AudioClip>(
+                "Assets/Audio/Horror/Ambience/Distant_Wolf_Howl.mp3");
+            haunted.howlVolume = 0.14f;
+            // Both howl layers are distant accents, not constant foreground audio.
+            haunted.firstHowlMinimumDelay = 60f;
+            haunted.firstHowlMaximumDelay = 95f;
+            haunted.minimumHowlInterval = 110f;
+            haunted.maximumHowlInterval = 170f;
+        }
+
+        private static void ConfigureFootsteps(RecordedFootsteps footsteps, Transform movementOrigin)
+        {
+            footsteps.movementOrigin = movementOrigin;
+            // Soft, leafy footfalls: use the licensed single-step recordings,
+            // not the old hybrid click/thump bakes that sounded like hard shoes.
+            footsteps.volume = 0.24f;
+            footsteps.stepDistance = 0.72f;
+            footsteps.minimumSpeed = 0.25f;
+            footsteps.grassSteps = new[]
+            {
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Horror/Foley/Grass_Step_01.mp3"),
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Horror/Foley/Grass_Step_02.mp3"),
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Horror/Foley/Grass_Step_03.mp3")
+            };
+            footsteps.hardFloorSteps = new[]
+            {
+                AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/Horror/Foley/Wood_Step_01.mp3")
+            };
+            footsteps.hapticTick = false;
         }
 
         // --------------------------------------------------------------- drums
@@ -1205,7 +1865,7 @@ namespace PixBand.EditorTools
             return sticks;
         }
 
-        private static DrumPad[] BuildPads(Transform kit, AudioSource source, ParticleSystem dust)
+        private static DrumPad[] BuildPads(Transform kit, AudioSource source, ParticleSystem dust, Material ringMaterial)
         {
             string[] padNames =
             {
@@ -1250,6 +1910,15 @@ namespace PixBand.EditorTools
                 pad.pitchRange = new Vector2(pitches[i] * 0.97f, pitches[i] * 1.03f);
                 pad.dust = dust;
                 pad.minTipSpeed = 0.5f;
+                // The trigger lives on this empty object; the visible head is the
+                // mesh transform it was measured from, so it can recoil safely.
+                pad.head = target;
+                pad.cymbal = i >= 5;
+                pad.recoilDepth = 0.010f;
+                pad.ringMaterial = ringMaterial;
+                pad.impactTint = pad.cymbal
+                    ? new Color(1f, 0.86f, 0.55f)
+                    : new Color(1f, 0.62f, 0.34f);
 
                 pads.Add(pad);
             }
@@ -1488,6 +2157,12 @@ namespace PixBand.EditorTools
             GameObject setup = AssetDatabase.LoadAssetAtPath<GameObject>(XrSetupPath);
             GameObject xr = null;
 
+            GameObject handLeft = AssetDatabase.LoadAssetAtPath<GameObject>(HandLeftModelPath);
+            GameObject handRight = AssetDatabase.LoadAssetAtPath<GameObject>(HandRightModelPath);
+            Material handMaterial = MakeHandMaterial();
+            if (handLeft == null || handRight == null)
+                Debug.LogWarning("[PixBand] Rigged hand meshes are missing; falling back to no hand visuals.");
+
             if (setup != null)
             {
                 xr = (GameObject)PrefabUtility.InstantiatePrefab(setup);
@@ -1504,6 +2179,26 @@ namespace PixBand.EditorTools
                     cam.clearFlags = CameraClearFlags.SolidColor;
                     cam.backgroundColor = RenderSettings.fogColor;
                 }
+
+                PlayerBodyVisuals xrBody = xr.AddComponent<PlayerBodyVisuals>();
+                xrBody.movementOrigin = cam != null ? cam.transform : null;
+                Transform leftController = FindDeep(xr.transform, "Left Controller");
+                Transform rightController = FindDeep(xr.transform, "Right Controller");
+                xrBody.leftHandTarget = leftController;
+                xrBody.rightHandTarget = rightController;
+                xrBody.leftHandPrefab = handLeft;
+                xrBody.rightHandPrefab = handRight;
+                xrBody.handMaterial = handMaterial;
+                xrBody.handScale = 1f;
+                xrBody.SetHandPose(
+                    Vector3.zero, new Vector3(0f, 0f, -50f),
+                    Vector3.zero, new Vector3(180f, 0f, -90f));
+                DisableControllerModelPrefab(leftController);
+                DisableControllerModelPrefab(rightController);
+
+                RecordedFootsteps xrFootsteps = xr.AddComponent<RecordedFootsteps>();
+                ConfigureFootsteps(xrFootsteps, null);
+                xrFootsteps.spatialBlend = 0.18f;
             }
             else
             {
@@ -1534,8 +2229,24 @@ namespace PixBand.EditorTools
             DesktopRigController controller = fp.AddComponent<DesktopRigController>();
             controller.head = head.transform;
 
+            PlayerBodyVisuals desktopBody = fp.AddComponent<PlayerBodyVisuals>();
+            desktopBody.movementOrigin = head.transform;
+            desktopBody.leftHandPrefab = handLeft;
+            desktopBody.rightHandPrefab = handRight;
+            desktopBody.handMaterial = handMaterial;
+            desktopBody.handScale = 1f;
+            desktopBody.proceduralArms = true;
+
+            RecordedFootsteps desktopFootsteps = fp.AddComponent<RecordedFootsteps>();
+            ConfigureFootsteps(desktopFootsteps, head.transform);
+            desktopFootsteps.spatialBlend = 0.12f;
+
             DesktopStickGrabber grabber = fp.AddComponent<DesktopStickGrabber>();
             grabber.head = head.transform;
+            // Keep the desktop hands slightly below the view center while
+            // leaving enough of the grip visible during drum play. The holder
+            // is now rig-root-relative so it does not rotate with camera pitch.
+            grabber.holderOffset = new Vector3(0.28f, 1.12f, 0.42f);
 
             GameObject manager = new GameObject("RigManager");
             DualRigManager dual = manager.AddComponent<DualRigManager>();
@@ -1572,6 +2283,28 @@ namespace PixBand.EditorTools
                 menu.buttons[i].menu = startMenu;
         }
 
+        /// <summary>
+        /// Replace the sample controller meshes with hand visuals parented to
+        /// the tracked poses. Keep all interactor and input components intact.
+        /// </summary>
+        private static void DisableControllerModelPrefab(Transform controller)
+        {
+            if (controller == null) return;
+            MonoBehaviour[] components = controller.GetComponents<MonoBehaviour>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                MonoBehaviour component = components[i];
+                if (component == null) continue;
+                SerializedObject serialized = new SerializedObject(component);
+                SerializedProperty modelPrefab = serialized.FindProperty("m_ModelPrefab");
+                if (modelPrefab == null || modelPrefab.objectReferenceValue == null) continue;
+                modelPrefab.objectReferenceValue = null;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                if (PrefabUtility.IsPartOfPrefabInstance(component))
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(component);
+            }
+        }
+
         // --------------------------------------------------------------- labels
 
         private static GameObject CreateLabel(string name, string text, Vector3 position, float size, Color color)
@@ -1600,9 +2333,34 @@ namespace PixBand.EditorTools
             AssetDatabase.CreateAsset(mesh, path);
         }
 
-        private static void CreateBox(Transform parent, string name, Vector3 size, Vector3 localPosition, Material material)
+        /// <summary>World-space bounds of every renderer under a root.</summary>
+        private static Bounds CalculateBounds(GameObject root)
         {
-            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0) return new Bounds(root.transform.position, Vector3.one);
+
+            Bounds bounds = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
+            return bounds;
+        }
+
+        /// <summary>
+        /// Bounds of a skinned hierarchy taken from its bones. SkinnedMeshRenderer
+        /// bounds come from the bind pose and can be far larger than the visible
+        /// model, while the bones follow the authored size.
+        /// </summary>
+        private static Bounds CalculateBoneBounds(GameObject root)
+        {
+            Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+            if (transforms.Length == 0) return new Bounds(root.transform.position, Vector3.one);
+
+            Bounds bounds = new Bounds(transforms[0].position, Vector3.zero);
+            for (int i = 1; i < transforms.Length; i++) bounds.Encapsulate(transforms[i].position);
+            return bounds;
+        }
+
+        private static void CreateBox(Transform parent, string name, Vector3 size, Vector3 localPosition, Material material)
+        {            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = name;
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPosition;
@@ -1628,6 +2386,17 @@ namespace PixBand.EditorTools
             if (AssetDatabase.LoadAssetAtPath<Material>(path) != null)
                 AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(material, path);
+            return material;
+        }
+
+        private static Material MakeHandMaterial()
+        {
+            Material material = MakeStandard("Player_Hands_Skin", Color.white, 0.32f);
+            Texture2D skin = AssetDatabase.LoadAssetAtPath<Texture2D>(HandSkinPath);
+            if (skin != null) material.mainTexture = skin;
+            material.SetFloat("_Metallic", 0f);
+            material.SetFloat("_Glossiness", 0.34f);
+            EditorUtility.SetDirty(material);
             return material;
         }
 
@@ -1722,6 +2491,12 @@ namespace PixBand.EditorTools
                             float flecks = Mathf.PerlinNoise(u * 96f + 0.2f, v * 96f + 0.8f);
                             value = broad * 0.46f + fine * 0.28f + flecks * 0.26f;
                             break;
+                        case "grass":
+                            float grassFlecks = Mathf.PerlinNoise(u * 110f + 2.1f, v * 110f + 9.4f);
+                            float alongBlade = Mathf.Sin((u * 0.82f + v * 0.57f) * 170f + fine * 2.6f) * 0.5f + 0.5f;
+                            float acrossBlade = Mathf.Sin((-u * 0.57f + v * 0.82f) * 38f + broad * 3f) * 0.5f + 0.5f;
+                            value = broad * 0.30f + fine * 0.19f + grassFlecks * 0.27f + alongBlade * acrossBlade * 0.24f;
+                            break;
                         default:
                             value = broad * 0.48f + fine * 0.34f + grain * 0.18f;
                             break;
@@ -1757,8 +2532,18 @@ namespace PixBand.EditorTools
             return material;
         }
 
-        private static Texture2D MakeDotTexture()
+        /// <summary>
+        /// Soft radial dot used by fireflies and stars. The asset is created once
+        /// and reused: deleting and recreating it mid-build used to invalidate
+        /// every material that already referenced the previous object, which is
+        /// what turned the mist and cloud billboards into opaque rectangles.
+        /// </summary>
+        private static Texture2D MakeSoftDotTexture(string assetName)
         {
+            string path = "Assets/Art/Textures/" + assetName + ".asset";
+            Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (existing != null) return existing;
+
             const int size = 64;
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
             Color[] pixels = new Color[size * size];
@@ -1778,9 +2563,131 @@ namespace PixBand.EditorTools
 
             texture.SetPixels(pixels);
             texture.Apply();
-            string path = "Assets/Art/FireflyDot.asset";
-            AssetDatabase.DeleteAsset(path);
+            EnsureFolder("Assets/Art/Textures");
             AssetDatabase.CreateAsset(texture, path);
+            return texture;
+        }
+
+        /// <summary>Ring sprite for the drum impact flash (white, alpha in the ring).</summary>
+        private static Texture2D MakeImpactRingTexture()
+        {
+            const string path = "Assets/Art/Textures/Drum_Impact_Ring.asset";
+            Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (existing != null) return existing;
+
+            const int size = 128;
+            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            Color[] pixels = new Color[size * size];
+            float center = (size - 1) * 0.5f;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dx = (x - center) / center;
+                    float dy = (y - center) / center;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy);
+                    float ring = Mathf.Clamp01(1f - Mathf.Abs(d - 0.74f) / 0.26f);
+                    float inner = Mathf.Clamp01(1f - d) * 0.25f;
+                    float a = Mathf.Clamp01(ring * ring + inner);
+                    pixels[y * size + x] = new Color(1f, 1f, 1f, a);
+                }
+            }
+
+            texture.SetPixels(pixels);
+            texture.Apply();
+            EnsureFolder("Assets/Art/Textures");
+            AssetDatabase.CreateAsset(texture, path);
+            return texture;
+        }
+
+        /// <summary>Hooded silhouette used for the ghosts behind the windows.</summary>
+        private static Texture2D MakeGhostTexture()
+        {
+            const string path = "Assets/Art/Textures/Ghost_Silhouette.asset";
+            const int width = 128;
+            const int height = 192;
+
+            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            bool created = texture == null;
+            if (created)
+            {
+                texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                texture.name = "Ghost_Silhouette";
+            }
+
+            Color[] pixels = new Color[width * height];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float px = (x - width * 0.5f) / (width * 0.5f);
+                    float py = y / (float)height;
+
+                    // Robe: widest at the ragged hem, sloping up to narrow
+                    // shoulders, so the shape reads as a body and not a bell.
+                    float robe = 0f;
+                    if (py <= 0.755f)
+                    {
+                        float t = Mathf.Clamp01(py / 0.755f);
+                        float half = Mathf.Lerp(0.82f, 0.44f, Mathf.SmoothStep(0f, 1f, t));
+                        float edge = Mathf.Clamp01((half - Mathf.Abs(px)) / 0.055f);
+                        float hem = Mathf.Clamp01(
+                            (py - 0.045f - 0.028f * Mathf.Sin(px * 13f + 1.3f)) / 0.045f);
+                        robe = edge * hem;
+                    }
+
+                    // Hood: an ellipse with a slight point at the crown.
+                    float hoodX = px / 0.265f;
+                    float hoodY = (py - 0.845f) / 0.172f;
+                    float hood = Mathf.Clamp01(1f - Mathf.Sqrt(hoodX * hoodX + hoodY * hoodY));
+                    if (py > 0.92f)
+                    {
+                        float crown = Mathf.Clamp01((0.265f - Mathf.Abs(px) * (1f + (py - 0.92f) * 9f)) / 0.06f);
+                        hood = Mathf.Max(hood, crown * Mathf.Clamp01((1.02f - py) / 0.02f));
+                    }
+
+                    // Shoulders: a soft cap that joins the hood to the robe.
+                    float capX = px / 0.38f;
+                    float capY = (py - 0.735f) / 0.09f;
+                    float cap = Mathf.Clamp01(1f - Mathf.Sqrt(capX * capX + capY * capY));
+
+                    float alpha = Mathf.Max(robe, Mathf.Max(cap, hood));
+
+                    // A notch under the chin keeps head and body apart.
+                    float notch = Mathf.Clamp01(
+                        1f - Mathf.Sqrt((px / 0.12f) * (px / 0.12f) +
+                                        ((py - 0.762f) / 0.042f) * ((py - 0.762f) / 0.042f)));
+                    alpha *= 1f - 0.85f * notch;
+
+                    // Hollow eyes: the pane glows through the silhouette.
+                    for (int e = -1; e <= 1; e += 2)
+                    {
+                        float ex = (px - e * 0.095f) / 0.05f;
+                        float ey = (py - 0.868f) / 0.034f;
+                        float eye = Mathf.Clamp01(1f - Mathf.Sqrt(ex * ex + ey * ey));
+                        alpha = Mathf.Lerp(alpha, alpha * 0.10f, eye);
+                    }
+
+                    alpha = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(alpha));
+                    pixels[y * width + x] = new Color(1f, 1f, 1f, alpha);
+                }
+            }
+
+            texture.SetPixels(pixels);
+            texture.Apply();
+
+            if (created)
+            {
+                EnsureFolder("Assets/Art/Textures");
+                AssetDatabase.CreateAsset(texture, path);
+            }
+            else
+            {
+                EditorUtility.SetDirty(texture);
+            }
+
             return texture;
         }
 

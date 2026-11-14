@@ -20,7 +20,9 @@ namespace PixBand.Core
         public float strikeRadius = 0.22f;
 
         [Header("Stick pose")]
-        public Vector3 holderOffset = new Vector3(0.24f, -0.2f, 0.68f);
+        // Desktop grips belong to the torso, not the pitched camera. Looking
+        // down should bring the hands into view instead of tipping them away.
+        public Vector3 holderOffset = new Vector3(0.28f, 1.12f, 0.42f);
         public float restPitch = 58f;
         public float strikePitch = 42f;
         public float strikeDuration = 0.16f;
@@ -46,11 +48,21 @@ namespace PixBand.Core
             for (int i = 0; i < 2; i++)
             {
                 Transform holder = new GameObject("DesktopStickHolder_" + (i + 1)).transform;
-                holder.SetParent(head, false);
+                holder.SetParent(transform, false);
                 float side = i == 0 ? -1f : 1f;
                 holder.localPosition = new Vector3(side * Mathf.Abs(holderOffset.x), holderOffset.y, holderOffset.z);
                 holder.localRotation = Quaternion.Euler(restPitch, 0f, side * 6f);
                 holders.Add(holder);
+            }
+
+            PlayerBodyVisuals body = GetComponent<PlayerBodyVisuals>();
+            if (body != null)
+            {
+                // Both hands use one consistent palms-down pose around the sticks.
+                body.SetHandPose(
+                    new Vector3(0.015f, -0.04f, -0.025f), new Vector3(180f, 0f, 90f),
+                    new Vector3(0.035f, -0.09f, -0.055f), new Vector3(180f, 0f, -90f));
+                body.SetHandTargets(holders[0], holders[1]);
             }
         }
 
@@ -74,7 +86,7 @@ namespace PixBand.Core
             if (held.Count > 0 && Input.GetMouseButtonDown(0))
                 Strike();
 
-            for (int i = 0; i < holders.Count; i++)
+            for (int i = 0; i < holders.Count && i < swings.Length; i++)
             {
                 float side = i == 0 ? -1f : 1f;
                 holders[i].localRotation = Quaternion.Euler(restPitch + swings[i], 0f, side * 6f);
@@ -110,6 +122,8 @@ namespace PixBand.Core
             int hand = held.Count;
             held.Add(best);
             best.ExternalGrab(holders[hand]);
+            PlayerBodyVisuals visuals = GetComponent<PlayerBodyVisuals>();
+            if (visuals != null) visuals.SetHandHeld(hand, true);
         }
 
         private void Strike()
@@ -120,6 +134,8 @@ namespace PixBand.Core
             nextStrikeHand++;
             if (swingRoutines[hand] != null) StopCoroutine(swingRoutines[hand]);
             swingRoutines[hand] = StartCoroutine(Swing(hand));
+            PlayerBodyVisuals visuals = GetComponent<PlayerBodyVisuals>();
+            if (visuals != null) visuals.PulseHand(hand);
 
             RaycastHit[] hits = Physics.SphereCastAll(
                 head.position,
@@ -162,6 +178,8 @@ namespace PixBand.Core
             for (int i = held.Count - 1; i >= 0; i--)
             {
                 if (held[i] != null) held[i].ExternalRelease();
+                PlayerBodyVisuals visuals = GetComponent<PlayerBodyVisuals>();
+                if (visuals != null) visuals.SetHandHeld(i, false);
                 held.RemoveAt(i);
                 swings[i] = 0f;
             }

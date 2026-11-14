@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
+using PixBand.Core;
 
 namespace PixBand.Interaction
 {
@@ -25,6 +26,7 @@ namespace PixBand.Interaction
         private bool externalHeld;
         private Transform externalHolder;
         private Coroutine returnRoutine;
+        private float nextHandPulseTime;
 
         public float TipSpeed { get; private set; }
         public bool IsHeld { get { return held; } }
@@ -77,12 +79,25 @@ namespace PixBand.Interaction
             Vector3 p = tip.position;
             if (dt > 0.0001f) TipSpeed = Vector3.Distance(p, lastTipPosition) / dt;
             lastTipPosition = p;
+
+            if (TipSpeed > 2f && Time.time >= nextHandPulseTime && grab.interactorsSelecting.Count > 0)
+            {
+                Component interactor = grab.interactorsSelecting[0] as Component;
+                if (interactor != null)
+                {
+                    PlayerBodyVisuals[] visuals = FindObjectsOfType<PlayerBodyVisuals>();
+                    for (int i = 0; i < visuals.Length; i++)
+                        visuals[i].PulseHandFromInteractor(interactor.transform);
+                    nextHandPulseTime = Time.time + 0.18f;
+                }
+            }
         }
 
         private void OnSelectEntered(SelectEnterEventArgs args)
         {
             held = true;
             lastTipPosition = tip.position;
+            SetInteractorHandHeld(args.interactorObject, true);
             if (returnRoutine != null)
             {
                 StopCoroutine(returnRoutine);
@@ -98,7 +113,17 @@ namespace PixBand.Interaction
                 held = true;
                 return;
             }
+            SetInteractorHandHeld(args.interactorObject, false);
             BeginReturn();
+        }
+
+        private static void SetInteractorHandHeld(IXRSelectInteractor interactor, bool isHeld)
+        {
+            Component component = interactor as Component;
+            if (component == null) return;
+            PlayerBodyVisuals[] visuals = FindObjectsOfType<PlayerBodyVisuals>();
+            for (int i = 0; i < visuals.Length; i++)
+                visuals[i].SetHandHeldFromInteractor(component.transform, isHeld);
         }
 
         /// <summary>Grab without an XR controller (desktop mouse/keyboard testing).</summary>

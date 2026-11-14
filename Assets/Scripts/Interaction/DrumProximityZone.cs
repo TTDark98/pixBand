@@ -13,6 +13,7 @@ namespace PixBand.Interaction
         [Header("Detection")]
         public Transform player;
         public float radius = 3.2f;
+        public float exitRadius = 3.8f;
         public float checkInterval = 0.15f;
 
         [Header("Content")]
@@ -57,7 +58,10 @@ namespace PixBand.Interaction
             Vector3 b = transform.position;
             a.y = 0f;
             b.y = 0f;
-            bool inside = Vector3.Distance(a, b) <= radius;
+            float distance = Vector3.Distance(a, b);
+            // Separate enter/exit thresholds prevent rapid enable/force-release
+            // cycles as the player stands on the boundary or the XR head bobs.
+            bool inside = active ? distance <= Mathf.Max(radius, exitRadius) : distance <= radius;
 
             if (inside != active) SetActive(inside);
         }

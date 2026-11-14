@@ -2,57 +2,73 @@ using UnityEngine;
 
 namespace PixBand.Audio
 {
-    /// <summary>
-    /// Generates a looping wind bed at runtime so the project needs no external
-    /// ambience asset. Filtered noise with slow amplitude movement.
-    /// </summary>
+    /// <summary>Loops the recorded forest wind and birds soundscape.</summary>
     [RequireComponent(typeof(AudioSource))]
     public class WindAmbience : MonoBehaviour
     {
-        [Range(0f, 1f)] public float volume = 0.35f;
-        public float loopSeconds = 8f;
-        public float cutoff = 0.015f;
+        public AudioClip ambienceClip;
+        [Range(0f, 1f)] public float volume = 0.48f;
+        [Header("Howling Gusts")]
+        public AudioClip howlClip;
+        [Range(0f, 1f)] public float howlVolume = 0.28f;
+        [Min(1f)] public float firstHowlMinimumDelay = 7f;
+        [Min(1f)] public float firstHowlMaximumDelay = 13f;
+        [Min(1f)] public float minimumHowlInterval = 20f;
+        [Min(1f)] public float maximumHowlInterval = 34f;
+
+        private AudioSource howlSource;
+        private float nextHowlTime;
+
+        private void Awake()
+        {
+            AudioSource source = GetComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.loop = true;
+            source.spatialBlend = 0f;
+            source.volume = volume;
+            source.priority = 150;
+            source.dopplerLevel = 0f;
+            source.clip = ambienceClip;
+            if (ambienceClip != null &&
+                ambienceClip.loadState == AudioDataLoadState.Unloaded)
+                ambienceClip.LoadAudioData();
+            if (ambienceClip == null)
+                Debug.LogWarning("[PixBand Audio] Forest wind loop is not assigned.", this);
+
+            // Keep the howling layer independent from the continuous forest
+            // bed so the loop's pitch/volume never changes with a gust.
+            howlSource = gameObject.AddComponent<AudioSource>();
+            howlSource.playOnAwake = false;
+            howlSource.loop = false;
+            howlSource.spatialBlend = 0f;
+            howlSource.volume = howlVolume;
+            howlSource.priority = 125;
+            howlSource.dopplerLevel = 0f;
+            if (howlClip != null && howlClip.loadState == AudioDataLoadState.Unloaded)
+                howlClip.LoadAudioData();
+            if (howlClip == null)
+                Debug.LogWarning("[PixBand Audio] Howling wind clip is not assigned.", this);
+        }
 
         private void Start()
         {
             AudioSource source = GetComponent<AudioSource>();
-            source.clip = Generate();
-            source.loop = true;
-            source.spatialBlend = 0f;
-            source.volume = volume;
-            source.playOnAwake = false;
-            source.Play();
+            if (source.clip != null && !source.isPlaying) source.Play();
+            ScheduleHowl(firstHowlMinimumDelay, firstHowlMaximumDelay);
         }
 
-        private AudioClip Generate()
+        private void Update()
         {
-            const int sampleRate = 22050;
-            int length = Mathf.Max(1, Mathf.RoundToInt(sampleRate * loopSeconds));
-            float[] data = new float[length];
+            if (howlClip == null || Time.time < nextHowlTime) return;
+            howlSource.pitch = Random.Range(0.92f, 1.06f);
+            howlSource.PlayOneShot(howlClip, Random.Range(0.82f, 1f));
+            ScheduleHowl(minimumHowlInterval, maximumHowlInterval);
+        }
 
-            System.Random random = new System.Random(20261113);
-            float low = 0f;
-            float low2 = 0f;
-
-            for (int i = 0; i < length; i++)
-            {
-                float white = (float)(random.NextDouble() * 2.0 - 1.0);
-                low += cutoff * (white - low);
-                low2 += cutoff * 0.35f * (low - low2);
-
-                float t = (float)i / sampleRate;
-                float gust = 0.55f + 0.45f * Mathf.Sin(t * 0.55f + Mathf.Sin(t * 0.17f) * 2f);
-                float fade = Mathf.Min(1f, i / (sampleRate * 0.5f));
-                float fadeOut = Mathf.Min(1f, (length - i) / (sampleRate * 0.5f));
-
-                // Bring the filtered wind up to an audible level on small headset
-                // speakers while retaining plenty of headroom for drum hits.
-                data[i] = Mathf.Clamp(low2 * 14.0f * gust * fade * fadeOut, -0.72f, 0.72f);
-            }
-
-            AudioClip clip = AudioClip.Create("ProceduralWind", length, 1, sampleRate, false);
-            clip.SetData(data, 0);
-            return clip;
+        private void ScheduleHowl(float minimum, float maximum)
+        {
+            if (maximum < minimum) maximum = minimum;
+            nextHowlTime = Time.time + Random.Range(minimum, maximum);
         }
     }
 }
